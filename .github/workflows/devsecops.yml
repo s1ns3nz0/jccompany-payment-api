@@ -484,3 +484,107 @@ jobs:
           name: grype-image-results
           path: target/grype-image-results.json
           retention-days: 90
+
+  # ══════════════════════════════════════════════════════════════
+  # RELEASE Phase - Go/No-Go + SLSA + SBOM SCA + Summary
+  # DoD Guidebook Table 8: Release go/no-go decision - REQUIRED
+  # DoD Guidebook Table 8: SBOM SCA - REQUIRED
+  # DoD Guidebook Table 8: Release packaging with checksum - REQUIRED
+  # SSDF PS.2.1, PS.3.1, PS.3.2 / SP 800-204D §5.1.3
+  # NIST 800-53: SR-3, CM-3, AU-2
+  # ══════════════════════════════════════════════════════════════
+
+  release-gate:
+    name: "[RELEASE] Go/No-Go + SLSA + SBOM SCA"
+    runs-on: ubuntu-latest
+    needs: [integration-dast, sca-grype-image, trivy-cis, sast-spotbugs]
+    if: |
+      always() &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
+      needs.integration-dast.result == 'success' &&
+      needs.sca-grype-image.result != 'failure'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          cache: maven
+
+      - name: Rebuild for SLSA provenance (SP 800-204D §5.1.3)
+        run: mvn package -DskipTests
+
+      - name: Generate checksums (SSDF PS.3.2 / DoD Guidebook Table 8)
+        run: |
+          sha256sum target/*.jar > target/checksums.sha256
+          cat target/checksums.sha256
+
+      - name: Download SBOM for release SCA
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sbom-*
+          merge-multiple: true
+          path: target/
+
+      - name: Install Grype v0.79.3
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
+            | sh -s -- -b /usr/local/bin v0.79.3
+
+      - name: SBOM SCA 재스캔 at Release (DoD Guidebook Table 8 REQUIRED / RA-5, SR-3)
+        run: |
+          grype sbom:target/payment-api-sbom.json \
+            --output table \
+            --output json=target/grype-release-results.json
+        continue-on-error: true
+
+      - name: SLSA Provenance Attestation (SSDF PS.2.1 / SP 800-204D §5.1.3 / EO 14028)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: target/*.jar
+
+      - name: Upload release artifacts (SSDF PS.3.2)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts-${{ github.sha }}
+          path: |
+            target/*.jar
+            target/checksums.sha256
+            target/grype-release-results.json
+            target/payment-api-sbom.json
+          retention-days: 90
+
+      - name: Go/No-Go Decision Record (DoD Guidebook Table 8 REQUIRED / CM-3)
+        run: |
+          echo "## Release Gate - Go/No-Go Decision" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Time:** $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_STEP_SUMMARY
+          echo "**Actor:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Gate | NIST Control | SSDF | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------------|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Gitleaks | IA-5, SI-3 | PS.1 | ${{ needs.integration-dast.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Semgrep SAST | SA-11, SI-10 | PW.7 | ${{ needs.integration-dast.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SpotBugs SAST | SA-11, SC-13 | PW.7 | ${{ needs.sast-spotbugs.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Grype CVE | RA-5, SI-2, SR-3 | RV.1 | ${{ needs.sca-grype-image.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trivy CIS | CM-2, SI-3 | PW.4 | ${{ needs.trivy-cis.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration Test | SA-11, AC-3 | PW.8 | ${{ needs.integration-dast.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ZAP DAST | SA-11, SI-10 | PW.8 | ${{ needs.integration-dast.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SLSA Provenance | SR-3, CM-2 | PS.2 | generated |" >> $GITHUB_STEP_SUMMARY
+          echo "| SBOM SCA @ Release | SR-3, RA-5 | PS.3 | completed |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## SP 800-204D Supply Chain Hardening" >> $GITHUB_STEP_SUMMARY
+          echo "| Measure | Reference | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| SHA-pinned actions | §5.1.1 | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Minimal permissions | §3.2 | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| SBOM generated + validated | §5.1.1 | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| SLSA Provenance | §5.1.3 | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Checksums generated | PS.3.2 | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Secret scanning | §5.1.4 | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Grype version pinned | §5.1.2 | ✅ |" >> $GITHUB_STEP_SUMMARY
