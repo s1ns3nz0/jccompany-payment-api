@@ -1,0 +1,17 @@
+# Hadolint Configuration - JC Company payment-api
+# 근거: CIS Docker Benchmark v1.6 §4 / NIST 800-53 CM-7
+
+failure-threshold: error
+
+ignore:
+  # DL3008: apt-get 버전 고정 - maven 설치 시 버전 고정 어려움
+  - DL3008
+  # DL3009: apt-get clean - multi-stage build에서 불필요
+  - DL3009
+  # DL3015: --no-install-recommends - maven 의존성 필요
+  - DL3015
+
+trustedRegistries:
+  - docker.io
+  - gcr.io
+  - eclipse-temurin
