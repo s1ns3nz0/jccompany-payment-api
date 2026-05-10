@@ -37,7 +37,7 @@ jobs:
           fetch-depth: 0
 
       - name: Gitleaks (IA-5, SI-3, SR-3 / SSDF PS.1 / SP 800-204D §5.1.4)
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c3  # v2.3.4
+        uses: gitleaks/gitleaks-action@v2  # v2.3.4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
