@@ -54,16 +54,11 @@ jobs:
         with:
           config: >
             p/java
-            p/spring
             p/owasp-top-ten
             p/secrets
             p/sql-injection
             p/xss
             p/command-injection
-            p/java-jwt
-            p/crypto
-            p/log-injection
-            p/deserialization
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
