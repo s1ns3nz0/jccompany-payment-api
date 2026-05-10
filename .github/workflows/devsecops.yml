@@ -536,6 +536,7 @@ jobs:
 
       - name: SBOM SCA 재스캔 at Release (DoD Guidebook Table 8 REQUIRED / RA-5, SR-3)
         run: |
+          grype db update
           grype sbom:target/payment-api-sbom.json \
             --output table \
             --output json=target/grype-release-results.json \
