@@ -536,11 +536,13 @@ jobs:
 
       - name: SBOM SCA 재스캔 at Release (DoD Guidebook Table 8 REQUIRED / RA-5, SR-3)
         run: |
-          grype db update
+          GRYPE_DB_CACHE_DIR=$(mktemp -d)
+          grype db update --dir $GRYPE_DB_CACHE_DIR
           grype sbom:target/payment-api-sbom.json \
             --output table \
             --output json=target/grype-release-results.json \
-            --fail-on critical
+            --fail-on critical \
+            --db-dir $GRYPE_DB_CACHE_DIR
         continue-on-error: true
 
       - name: SLSA Provenance Attestation (SSDF PS.2.1 / SP 800-204D §5.1.3 / EO 14028)
