@@ -298,7 +298,9 @@ jobs:
           merge-multiple: true
 
       - name: Load Docker image
-        run: docker load < payment-api-image.tar.gz
+        run: |
+          docker load < payment-api-image.tar.gz
+          docker tag $(docker images --format '{{.Repository}}:{{.Tag}}' | grep payment-api | head -1) payment-api:latest
 
       - name: Start payment-api container
         run: |
@@ -370,7 +372,9 @@ jobs:
           merge-multiple: true
 
       - name: Load Docker image
-        run: docker load < payment-api-image.tar.gz
+        run: |
+          docker load < payment-api-image.tar.gz
+          docker tag $(docker images --format '{{.Repository}}:{{.Tag}}' | grep payment-api | head -1) payment-api:latest
 
       - name: Install Grype v0.79.3 (pinned / SP 800-204D §5.1.2)
         run: |
