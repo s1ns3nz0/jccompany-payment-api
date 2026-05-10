@@ -1,0 +1,63 @@
+# ZAP Rules Configuration - JC Company payment-api
+# 근거: OWASP ZAP Alert Docs + OWASP Cheat Sheet Series + NIST 800-53 통제
+# Format: <rule-id>	<IGNORE|WARN|FAIL>	<reason>
+#
+# ══════════════════════════════════════════════════════════════
+# FAIL: 반드시 차단 (파이프라인 중단)
+# 우리 OSCAL 통제 파일과 직접 연관
+# ══════════════════════════════════════════════════════════════
+#
+# si-10 (Input Validation) + ac-3 (Access Control)
+# OWASP Top 10 2021: A03 Injection
+40018	FAIL	SQL Injection: si-10 통제 위반. PreparedStatement 우회 시도 탐지
+40012	FAIL	XSS Reflected: si-10 통제 위반. 입력값 검증 우회
+40014	FAIL	XSS Persistent: si-10 통제 위반. 저장형 XSS
+40003	FAIL	CRLF Injection: si-10 통제 위반. HTTP 헤더 주입
+90019	FAIL	Server Side Code Injection: si-10 통제 위반. 원격 코드 실행
+90020	FAIL	Remote OS Command Injection: si-10 통제 위반. OS 명령 주입
+6	FAIL	Path Traversal: ac-3 통제 위반. 디렉토리 탐색 공격
+#
+# ia-5 (Authenticator Management)
+# OWASP Top 10 2021: A07 Authentication Failures
+10105	FAIL	Weak Authentication Method: ia-5 통제 위반. 취약한 인증 방식
+10194	FAIL	Base64 Encoded Credentials Disclosed: ia-5 통제 위반. 크리덴셜 노출
+#
+# sc-28 (Protection of Information at Rest)
+# OWASP Top 10 2021: A02 Cryptographic Failures
+10062	FAIL	PII Disclosure: sc-28 통제 위반. 개인정보 노출
+#
+# ══════════════════════════════════════════════════════════════
+# WARN: 보고만 함 (파이프라인 계속)
+# 실제 취약점 가능성 있으나 수동 검토 필요
+# ══════════════════════════════════════════════════════════════
+#
+# au-2 (Audit Logging)
+10023	WARN	Debug Error Messages: au-2 통제. 디버그 정보 노출 가능성
+10024	WARN	Sensitive Info in URL: au-2 통제. URL 로그에 민감정보 포함 가능
+#
+# sc-8 (Transmission Confidentiality)
+10094	WARN	Base64 Disclosure: sc-8 통제. Base64 인코딩된 데이터 노출
+10096	WARN	Timestamp Disclosure: 정보 노출 가능성. 수동 검토 필요
+#
+# ══════════════════════════════════════════════════════════════
+# IGNORE: False Positive (REST API + CI 환경 특성)
+# ══════════════════════════════════════════════════════════════
+#
+# UI/브라우저 전용 (OWASP REST Security Cheat Sheet)
+10020	IGNORE	X-Frame-Options: REST API는 iframe 없음. 브라우저 전용
+10021	IGNORE	X-Content-Type-Options: 브라우저 MIME sniffing 방지. REST API 해당 없음
+10016	IGNORE	Web Browser XSS Protection: 브라우저 전용
+10038	IGNORE	CSP Header Not Set: 브라우저 렌더링 전용. REST API 해당 없음
+#
+# CI 환경 (NIST 800-53 SC-8: 운영환경 HTTPS 강제)
+10035	IGNORE	HSTS Missing: CI는 HTTP 실행. 운영환경 SC-8로 HTTPS 강제
+10036	IGNORE	HTTP Server Response Header: CI 환경. 운영에서 별도 처리
+#
+# Stateless REST API 쿠키 미사용 (OWASP CSRF Prevention Cheat Sheet)
+10202	IGNORE	Anti-CSRF: Stateless REST API + Bearer Token. CSRF 해당 없음
+10011	IGNORE	Cookie Without Secure Flag: 쿠키 미사용 (JWT Bearer Token)
+10010	IGNORE	Cookie No HttpOnly Flag: 쿠키 미사용 (JWT Bearer Token)
+#
+# 의도된 설계
+10015	IGNORE	Cache-Control: REST API JSON 응답. 캐시 제어 불필요
+10027	IGNORE	Suspicious Comments: SAST(Semgrep)에서 이미 처리
