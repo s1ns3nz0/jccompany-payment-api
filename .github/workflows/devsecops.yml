@@ -334,10 +334,10 @@ jobs:
           IMAGE_ID=$(docker load < payment-api-image.tar.gz | grep "Loaded image" | awk '{print $NF}')
           docker tag $IMAGE_ID payment-api:latest
 
-      - name: Install Trivy v0.50.0 (pinned / SP 800-204D §5.1.2)
+      - name: Install Trivy v0.70.0 (pinned / SP 800-204D §5.1.2)
         run: |
           curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin v0.50.0
+            | sh -s -- -b /usr/local/bin v0.70.0
 
       - name: Trivy CIS Docker Benchmark (CM-2, SI-3 / CIS Docker §4, §5)
         run: |
