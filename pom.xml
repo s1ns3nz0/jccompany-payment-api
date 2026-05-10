@@ -128,6 +128,19 @@
           </execution>
         </executions>
       </plugin>
+<!-- SpotBugs + FindSecBugs (SA-11, SI-10, SC-13) -->
+  <plugin>
+   <groupId>com.github.spotbugs</groupId>
+    <artifactId>spotbugs-maven-plugin</artifactId>
+     <version>4.8.3.1</version>
+      <dependencies>
+       <dependency>
+        <groupId>com.h3xstream.findsecbugs</groupId>
+        <artifactId>findsecbugs-plugin</artifactId>
+        <version>1.12.0</version>
+       </dependency>
+      </dependencies>
+     </plugin>
     </plugins>
   </build>
 </project>
