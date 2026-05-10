@@ -208,7 +208,7 @@ jobs:
       - name: CIS Java Benchmark Check (CM-7, SC-8, SC-13, AU-2, SR-3)
         run: |
           chmod +x scripts/cis-java-check.sh
-          ./scripts/cis-java-check.sh
+          ./scripts/cis-java-check.sh | tee cis-java-results.txt
         continue-on-error: true
 
       - name: Upload CIS Java results (SP 800-204D §5.1.3)
@@ -281,26 +281,14 @@ jobs:
           merge-multiple: true
           path: target/
 
-      - name: Install Grype v0.79.3 (pinned / SP 800-204D §5.1.2)
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
-            | sh -s -- -b /usr/local/bin v0.79.3
-
       - name: Scan SBOM for CVEs (RA-5, SI-2, SR-3 / SSDF RV.1)
-        run: |
-          grype sbom:target/payment-api-sbom.json \
-            --output table \
-            --output json=target/grype-sbom-results.json \
-            --fail-on critical
-        continue-on-error: true
-
-      - name: Upload Grype results (SP 800-204D §5.1.3 / SSDF RV.1.3)
-        uses: actions/upload-artifact@v4
-        if: always()
+        uses: anchore/scan-action@v4
         with:
-          name: grype-sbom-results
-          path: target/grype-sbom-results.json
-          retention-days: 90
+          sbom: target/payment-api-sbom.json
+          fail-build: false
+          severity-cutoff: critical
+          output-format: json
+        continue-on-error: true
 
   # ══════════════════════════════════════════════════════════════
   # TEST Phase - Job 1: JUnit + JaCoCo
@@ -492,27 +480,14 @@ jobs:
           IMAGE_ID=$(docker load < payment-api-image.tar.gz | grep "Loaded image" | awk '{print $NF}')
           docker tag $IMAGE_ID payment-api:latest
 
-      - name: Install Grype v0.79.3 (pinned / SP 800-204D §5.1.2)
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
-            | sh -s -- -b /usr/local/bin v0.79.3
-
       - name: Scan container image for CVEs (RA-5, SR-3 / SSDF PS.3.2)
-        run: |
-          mkdir -p target
-          grype payment-api:latest \
-            --output table \
-            --output json=target/grype-image-results.json \
-            --fail-on critical
-        continue-on-error: true
-
-      - name: Upload Grype image results (SP 800-204D §5.1.3)
-        uses: actions/upload-artifact@v4
-        if: always()
+        uses: anchore/scan-action@v4
         with:
-          name: grype-image-results
-          path: target/grype-image-results.json
-          retention-days: 90
+          image: payment-api:latest
+          fail-build: false
+          severity-cutoff: critical
+          output-format: json
+        continue-on-error: true
 
   # ══════════════════════════════════════════════════════════════
   # RELEASE Phase - Go/No-Go + SLSA + SBOM SCA + Summary
@@ -597,7 +572,7 @@ jobs:
           echo "| Semgrep SAST | SA-11, SI-10 | PW.7 | ${{ needs.integration-dast.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| CIS Java | CM-7, SC-8, SC-13 | PW.7 | ${{ needs.integration-dast.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| SpotBugs SAST | SA-11, SC-13 | PW.7 | ${{ needs.sast-spotbugs.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Grype CVE | RA-5, SI-2, SR-3 | RV.1 | ${{ needs.sca-grype-image.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Grype CVE (SBOM) | RA-5, SI-2, SR-3 | RV.1 | ${{ needs.sca-grype-image.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Trivy CIS Docker | CM-2, SI-3 | PW.4 | ${{ needs.trivy-cis.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Integration Test | SA-11, AC-3 | PW.8 | ${{ needs.integration-dast.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| ZAP DAST | SA-11, SI-10 | PW.8 | ${{ needs.integration-dast.result }} |" >> $GITHUB_STEP_SUMMARY
