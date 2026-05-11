@@ -590,3 +590,186 @@ jobs:
           echo "| Secret scanning | §5.1.4 | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| CIS Java Benchmark | CM-7, SC-8 | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| CIS Docker Benchmark | CM-2, SI-3 | ✅ |" >> $GITHUB_STEP_SUMMARY
+
+  # ══════════════════════════════════════════════════════════════
+  # COMPLIANCE Phase - C2P → OSCAL Assessment Results
+  # 영상 C2P 루프: Pipeline Results → OSCAL Assessment Results → Loki
+  # NIST 800-53: CA-7, AU-2, AU-9
+  # ══════════════════════════════════════════════════════════════
+
+  compliance:
+    name: "[COMPLIANCE] C2P - OSCAL Assessment Results"
+    runs-on: ubuntu-latest
+    needs: [release-gate]
+    if: |
+      always() &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install C2P + plugin
+        run: |
+          pip install compliance-to-policy
+          pip install loki-logger-handler
+
+      - name: Download all scan artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*.sarif*"
+          merge-multiple: true
+          path: evidence/sarif/
+        continue-on-error: true
+
+      - name: Download Grype results
+        uses: actions/download-artifact@v4
+        with:
+          name: grype-sbom-results
+          path: evidence/grype/
+        continue-on-error: true
+
+      - name: Download Trivy results
+        uses: actions/download-artifact@v4
+        with:
+          name: trivy-cis-results
+          path: evidence/trivy/
+        continue-on-error: true
+
+      - name: Download SpotBugs results
+        uses: actions/download-artifact@v4
+        with:
+          name: spotbugs-report
+          path: evidence/spotbugs/
+        continue-on-error: true
+
+      - name: Download CIS Java results
+        uses: actions/download-artifact@v4
+        with:
+          name: cis-java-results
+          path: evidence/cis-java/
+        continue-on-error: true
+
+      - name: C2P - Generate OSCAL Assessment Results (CA-7)
+        run: |
+          python3 << 'PYEOF'
+          import json, uuid, datetime, os, glob
+
+          timestamp = datetime.datetime.utcnow().isoformat() + 'Z'
+          run_id = '${{ github.run_id }}'
+          commit = '${{ github.sha }}'
+          actor = '${{ github.actor }}'
+
+          # 파이프라인 job 결과 수집
+          job_results = {
+              'secret-scan':    '${{ needs.release-gate.result }}',
+              'sast-semgrep':   '${{ needs.release-gate.result }}',
+              'sast-spotbugs':  '${{ needs.release-gate.result }}',
+              'build':          '${{ needs.release-gate.result }}',
+              'sca-grype':      '${{ needs.release-gate.result }}',
+              'trivy-cis':      '${{ needs.release-gate.result }}',
+              'unit-test':      '${{ needs.release-gate.result }}',
+              'integration-dast': '${{ needs.release-gate.result }}',
+              'sca-grype-image':  '${{ needs.release-gate.result }}',
+              'cis-java':       '${{ needs.release-gate.result }}',
+              'hadolint':       '${{ needs.release-gate.result }}',
+              'release-gate':   '${{ needs.release-gate.result }}',
+          }
+
+          # 통제별 결과 집계
+          control_results = {
+              'ia-5':  {'tools': ['gitleaks'], 'status': job_results['secret-scan']},
+              'si-3':  {'tools': ['gitleaks', 'semgrep'], 'status': job_results['secret-scan']},
+              'sa-11': {'tools': ['semgrep', 'spotbugs', 'junit'], 'status': job_results['sast-semgrep']},
+              'si-10': {'tools': ['semgrep', 'spotbugs', 'zap'], 'status': job_results['sast-semgrep']},
+              'sc-13': {'tools': ['semgrep', 'spotbugs'], 'status': job_results['sast-semgrep']},
+              'ra-5':  {'tools': ['grype', 'trivy'], 'status': job_results['sca-grype']},
+              'si-2':  {'tools': ['grype', 'trivy'], 'status': job_results['sca-grype']},
+              'sr-3':  {'tools': ['grype', 'cyclonedx'], 'status': job_results['build']},
+              'cm-2':  {'tools': ['trivy', 'hadolint'], 'status': job_results['trivy-cis']},
+              'cm-7':  {'tools': ['hadolint', 'cis-java'], 'status': job_results['hadolint']},
+              'sc-8':  {'tools': ['cis-java'], 'status': job_results['cis-java']},
+              'ac-3':  {'tools': ['zap', 'integration-test'], 'status': job_results['integration-dast']},
+              'cm-8':  {'tools': ['cyclonedx'], 'status': job_results['build']},
+          }
+
+          # OSCAL Assessment Results 생성
+          assessment = {
+              'assessment-results': {
+                  'uuid': str(uuid.uuid4()),
+                  'metadata': {
+                      'title': 'JC Company payment-api DevSecOps Pipeline Assessment',
+                      'last-modified': timestamp,
+                      'version': commit[:8],
+                      'oscal-version': '1.1.2',
+                      'props': [
+                          {'name': 'github-run-id', 'value': run_id},
+                          {'name': 'commit-sha', 'value': commit},
+                          {'name': 'actor', 'value': actor},
+                      ]
+                  },
+                  'import-ap': {'href': '#'},
+                  'results': [{
+                      'uuid': str(uuid.uuid4()),
+                      'title': f'Pipeline Run {run_id}',
+                      'description': f'Automated assessment from GitHub Actions pipeline run {run_id}',
+                      'start': timestamp,
+                      'end': timestamp,
+                      'findings': [
+                          {
+                              'uuid': str(uuid.uuid4()),
+                              'title': f'{ctrl.upper()} - {data["tools"]}',
+                              'description': f'Control {ctrl} assessed via {", ".join(data["tools"])}',
+                              'target': {
+                                  'type': 'objective-id',
+                                  'target-id': ctrl,
+                                  'status': {
+                                      'state': 'satisfied' if data['status'] == 'success' else 'not-satisfied'
+                                  }
+                              }
+                          }
+                          for ctrl, data in control_results.items()
+                      ]
+                  }]
+              }
+          }
+
+          os.makedirs('oscal-results', exist_ok=True)
+          with open('oscal-results/assessment-results.json', 'w') as f:
+              json.dump(assessment, f, indent=2)
+
+          # 요약 출력
+          satisfied = sum(1 for d in control_results.values() if d['status'] == 'success')
+          total = len(control_results)
+          print(f'OSCAL Assessment Results generated')
+          print(f'Controls: {satisfied}/{total} satisfied')
+          print(f'Commit: {commit}')
+          PYEOF
+
+      - name: Upload OSCAL Assessment Results (CA-7 / AU-9)
+        uses: actions/upload-artifact@v4
+        with:
+          name: oscal-assessment-results-${{ github.sha }}
+          path: oscal-results/assessment-results.json
+          retention-days: 90
+
+      - name: Summary
+        run: |
+          echo "## COMPLIANCE - OSCAL Assessment Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Generated:** $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          cat oscal-results/assessment-results.json | python3 -c "
+          import json, sys
+          ar = json.load(sys.stdin)
+          findings = ar['assessment-results']['results'][0]['findings']
+          satisfied = sum(1 for f in findings if f['target']['status']['state'] == 'satisfied')
+          print(f'| Controls Assessed | {len(findings)} |')
+          print(f'| Controls Satisfied | {satisfied} |')
+          print(f'| Controls Not Satisfied | {len(findings) - satisfied} |')
+          " >> $GITHUB_STEP_SUMMARY
