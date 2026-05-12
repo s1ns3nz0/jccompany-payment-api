@@ -916,7 +916,11 @@ jobs:
             --region ${{ secrets.AWS_REGION }}
 
       - name: Deploy to EKS (CM-2, CM-3 / DoD Table 10)
+        env:
+          IMAGE_TAG: ${{ needs.deliver.outputs.image-tag }}
         run: |
+          IMAGE_URI="${{ secrets.ECR_REGISTRY }}/jccompany/payment-api:${IMAGE_TAG}"
+          echo "Deploying: ${IMAGE_URI}"
           kubectl apply -f - << MANIFEST
           apiVersion: apps/v1
           kind: Deployment
@@ -925,7 +929,7 @@ jobs:
             namespace: payment-api
             labels:
               app: payment-api
-              version: "${{ needs.deliver.outputs.image-tag }}"
+              version: "${IMAGE_TAG}"
           spec:
             replicas: 2
             selector:
@@ -935,7 +939,7 @@ jobs:
               metadata:
                 labels:
                   app: payment-api
-                  version: "${{ needs.deliver.outputs.image-tag }}"
+                  version: "${IMAGE_TAG}"
               spec:
                 serviceAccountName: payment-api
                 securityContext:
@@ -946,7 +950,7 @@ jobs:
                     type: RuntimeDefault
                 containers:
                   - name: payment-api
-                    image: ${{ needs.deliver.outputs.image-uri }}
+                    image: ${IMAGE_URI}
                     ports:
                       - containerPort: 8080
                     securityContext:
@@ -1008,7 +1012,8 @@ jobs:
         run: |
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
             | sh -s -- -b /usr/local/bin
-          grype ${{ needs.deliver.outputs.image-uri }} \
+          IMAGE_URI="${{ secrets.ECR_REGISTRY }}/jccompany/payment-api:${{ needs.deliver.outputs.image-tag }}"
+          grype ${IMAGE_URI} \
             --output table \
             --fail-on critical || true
           echo "Post-deploy scan completed"
