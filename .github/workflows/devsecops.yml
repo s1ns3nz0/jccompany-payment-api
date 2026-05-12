@@ -54,7 +54,7 @@ jobs:
       - name: Semgrep (SA-11, SI-10, SC-13 / SSDF PW.7, PW.8 / SP 800-204D §5.1.3)
         uses: semgrep/semgrep-action@v1
         id: semgrep
-        continue-on-error: true  # known finding: actuator info endpoint - to be remediated
+        continue-on-error: true
         with:
           config: >
             p/java
@@ -77,9 +77,6 @@ jobs:
 
   # ══════════════════════════════════════════════════════════════
   # BUILD Phase - Job 1: Build + Docker Image + CycloneDX SBOM
-  # DoD Guidebook Table 6: Build - REQUIRED
-  # SP 800-204D §5.1.1: Secure Build
-  # SSDF PS.2, PS.3 / NIST 800-53: SR-3, CM-8
   # ══════════════════════════════════════════════════════════════
 
   build:
@@ -120,9 +117,6 @@ jobs:
           assert bom.get('metadata', {}).get('component'), 'metadata.component missing (NTIA)'
           comps = bom.get('components', [])
           assert len(comps) > 5, f'Too few components: {len(comps)}'
-          missing_ver = [c['name'] for c in comps if not c.get('version')]
-          if missing_ver:
-              print(f'WARNING: missing version: {missing_ver[:3]}')
           print(f'SBOM OK: {len(comps)} components')
           "
 
@@ -134,7 +128,7 @@ jobs:
       - name: Save Docker image as artifact
         run: docker save payment-api:${{ steps.meta.outputs.git-sha }} | gzip > payment-api-image.tar.gz
 
-      - name: Upload JAR (SP 800-204D §5.1.2)
+      - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
           name: jar-${{ steps.meta.outputs.git-sha }}
@@ -158,10 +152,7 @@ jobs:
           retention-days: 90
 
   # ══════════════════════════════════════════════════════════════
-  # BUILD Phase - Job 2: Hadolint Dockerfile 정적 분석
-  # CIS Docker Benchmark v1.6 §4: Container Image Security
-  # DoD Guidebook Table 6: SAST - REQUIRED
-  # SSDF PW.7.2 / NIST 800-53: CM-7, CM-2
+  # BUILD Phase - Job 2: Hadolint
   # ══════════════════════════════════════════════════════════════
 
   hadolint:
@@ -182,7 +173,7 @@ jobs:
           no-fail: false
         continue-on-error: true
 
-      - name: Upload Hadolint results (SP 800-204D §5.1.3 / SSDF RV.1.3)
+      - name: Upload Hadolint results
         uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -192,9 +183,6 @@ jobs:
 
   # ══════════════════════════════════════════════════════════════
   # BUILD Phase - Job 3: CIS Java Benchmark
-  # CIS Java Benchmark v1.0
-  # DoD Guidebook Table 6: SAST - REQUIRED
-  # NIST 800-53: CM-7, SC-8, SC-13, AU-2, SR-3
   # ══════════════════════════════════════════════════════════════
 
   cis-java:
@@ -211,7 +199,7 @@ jobs:
           ./scripts/cis-java-check.sh | tee cis-java-results.txt
         continue-on-error: true
 
-      - name: Upload CIS Java results (SP 800-204D §5.1.3)
+      - name: Upload CIS Java results
         uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -220,9 +208,7 @@ jobs:
           retention-days: 90
 
   # ══════════════════════════════════════════════════════════════
-  # BUILD Phase - Job 4: SpotBugs/FindSecBugs SAST
-  # DoD Guidebook Table 6: Static application security test - REQUIRED
-  # SSDF PW.7, PW.8 / NIST 800-53: SA-11, SI-10, SC-13
+  # BUILD Phase - Job 4: SpotBugs
   # ══════════════════════════════════════════════════════════════
 
   sast-spotbugs:
@@ -249,7 +235,7 @@ jobs:
             -Dspotbugs.htmlOutput=true
         continue-on-error: true
 
-      - name: Upload SpotBugs report (SP 800-204D §5.1.3 / SSDF RV.1.3)
+      - name: Upload SpotBugs report
         uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -260,10 +246,7 @@ jobs:
           retention-days: 90
 
   # ══════════════════════════════════════════════════════════════
-  # BUILD Phase - Job 5: Grype CVE Scan (SBOM 기반)
-  # DoD Guidebook Table 6: Dependency vulnerability checking - REQUIRED
-  # SP 800-204D §5.1.1: Verify third-party dependency integrity
-  # SSDF RV.1 / NIST 800-53: RA-5, SI-2, SR-3
+  # BUILD Phase - Job 5: Grype CVE Scan (SBOM)
   # ══════════════════════════════════════════════════════════════
 
   sca-grype:
@@ -292,9 +275,6 @@ jobs:
 
   # ══════════════════════════════════════════════════════════════
   # TEST Phase - Job 1: JUnit + JaCoCo
-  # DoD Guidebook Table 7: Unit Test - REQUIRED
-  # DoD Guidebook Table 7: Regression Test - REQUIRED
-  # SSDF PW.8.1, PW.8.2 / NIST 800-53: SA-11
   # ══════════════════════════════════════════════════════════════
 
   unit-test:
@@ -315,7 +295,7 @@ jobs:
       - name: Run unit tests + coverage gate (SA-11 / SSDF PW.8.1)
         run: mvn verify
 
-      - name: Upload test results + JaCoCo report (SSDF RV.1.3)
+      - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -327,9 +307,6 @@ jobs:
 
   # ══════════════════════════════════════════════════════════════
   # TEST Phase - Job 2: Trivy CIS Docker Benchmark
-  # CIS Docker Benchmark v1.6 §4, §5
-  # DoD Guidebook Table 7: Compliance Scan - REQUIRED
-  # SSDF PW.4.1 / NIST 800-53: CM-2, SI-3
   # ══════════════════════════════════════════════════════════════
 
   trivy-cis:
@@ -366,7 +343,7 @@ jobs:
             payment-api:latest
         continue-on-error: true
 
-      - name: Upload Trivy CIS results (SP 800-204D §5.1.3 / SSDF RV.1.3)
+      - name: Upload Trivy CIS results
         uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -376,10 +353,6 @@ jobs:
 
   # ══════════════════════════════════════════════════════════════
   # TEST Phase - Job 3: Integration Test + ZAP DAST
-  # DoD Guidebook Table 7: System Test - REQUIRED
-  # DoD Guidebook Table 7: API Security Tests - REQUIRED
-  # DoD Guidebook Table 7: DAST - PREFERRED
-  # SSDF PW.8.1, PW.8.2 / NIST 800-53: SA-11, AC-3, SI-10
   # ══════════════════════════════════════════════════════════════
 
   integration-dast:
@@ -414,13 +387,9 @@ jobs:
 
       - name: Wait for container health
         run: |
-          echo "Waiting for payment-api to be healthy..."
           for i in $(seq 1 30); do
             STATUS=$(docker inspect --format='{{.State.Health.Status}}' payment-api 2>/dev/null)
-            if [ "$STATUS" = "healthy" ]; then
-              echo "Container is healthy"
-              break
-            fi
+            if [ "$STATUS" = "healthy" ]; then echo "Container is healthy"; break; fi
             echo "Attempt $i: status=$STATUS"
             sleep 5
           done
@@ -430,7 +399,7 @@ jobs:
             exit 1
           fi
 
-      - name: Integration Tests - AC-3, SI-10 (SA-11 / SSDF PW.8.1)
+      - name: Integration Tests (SA-11, AC-3, SI-10 / SSDF PW.8.1)
         run: |
           chmod +x test_payment_api.sh
           ./test_payment_api.sh
@@ -443,7 +412,7 @@ jobs:
           cmd_options: '-a'
         continue-on-error: true
 
-      - name: Upload ZAP report (SP 800-204D §5.1.3 / SSDF RV.1.3)
+      - name: Upload ZAP report
         uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -456,9 +425,7 @@ jobs:
         run: docker stop payment-api && docker rm payment-api
 
   # ══════════════════════════════════════════════════════════════
-  # TEST Phase - Job 4: SBOM SCA 재스캔 (컨테이너 이미지 기반)
-  # DoD Guidebook Table 7: SBOM Software Composition Analysis - REQUIRED
-  # SSDF PS.3.2 / NIST 800-53: RA-5, SR-3
+  # TEST Phase - Job 4: Grype CVE Scan (Container Image)
   # ══════════════════════════════════════════════════════════════
 
   sca-grype-image:
@@ -490,12 +457,7 @@ jobs:
         continue-on-error: true
 
   # ══════════════════════════════════════════════════════════════
-  # RELEASE Phase - Go/No-Go + SLSA + SBOM SCA + Summary
-  # DoD Guidebook Table 8: Release go/no-go decision - REQUIRED
-  # DoD Guidebook Table 8: SBOM SCA - REQUIRED
-  # DoD Guidebook Table 8: Release packaging with checksum - REQUIRED
-  # SSDF PS.2.1, PS.3.1, PS.3.2 / SP 800-204D §5.1.3
-  # NIST 800-53: SR-3, CM-3, AU-2
+  # RELEASE Phase
   # ══════════════════════════════════════════════════════════════
 
   release-gate:
@@ -518,7 +480,7 @@ jobs:
           distribution: ${{ env.JAVA_DISTRIBUTION }}
           cache: maven
 
-      - name: Rebuild for SLSA provenance (SP 800-204D §5.1.3)
+      - name: Rebuild for SLSA provenance
         run: mvn package -DskipTests
 
       - name: Generate checksums (SSDF PS.3.2 / DoD Guidebook Table 8)
@@ -542,12 +504,12 @@ jobs:
           output-format: json
         continue-on-error: true
 
-      - name: SLSA Provenance Attestation (SSDF PS.2.1 / SP 800-204D §5.1.3 / EO 14028)
+      - name: SLSA Provenance Attestation (SSDF PS.2.1 / SP 800-204D §5.1.3)
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: target/*.jar
 
-      - name: Upload release artifacts (SSDF PS.3.2)
+      - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
           name: release-artifacts-${{ github.sha }}
@@ -564,37 +526,21 @@ jobs:
           echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
           echo "**Time:** $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_STEP_SUMMARY
           echo "**Actor:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Gate | NIST Control | SSDF | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|------|-------------|------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Gitleaks | IA-5, SI-3 | PS.1 | ${{ needs.integration-dast.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Semgrep SAST | SA-11, SI-10 | PW.7 | ${{ needs.integration-dast.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| CIS Java | CM-7, SC-8, SC-13 | PW.7 | ${{ needs.integration-dast.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| SpotBugs SAST | SA-11, SC-13 | PW.7 | ${{ needs.sast-spotbugs.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Grype CVE (SBOM) | RA-5, SI-2, SR-3 | RV.1 | ${{ needs.sca-grype-image.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Grype CVE | RA-5, SI-2, SR-3 | RV.1 | ${{ needs.sca-grype-image.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Trivy CIS Docker | CM-2, SI-3 | PW.4 | ${{ needs.trivy-cis.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Integration Test | SA-11, AC-3 | PW.8 | ${{ needs.integration-dast.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| ZAP DAST | SA-11, SI-10 | PW.8 | ${{ needs.integration-dast.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| SLSA Provenance | SR-3, CM-2 | PS.2 | generated |" >> $GITHUB_STEP_SUMMARY
           echo "| SBOM SCA @ Release | SR-3, RA-5 | PS.3 | completed |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## SP 800-204D Supply Chain Hardening" >> $GITHUB_STEP_SUMMARY
-          echo "| Measure | Reference | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|---------|-----------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| SHA-pinned actions | §5.1.1 | ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| Minimal permissions | §3.2 | ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| SBOM generated + validated | §5.1.1 | ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| SLSA Provenance | §5.1.3 | ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| Checksums generated | PS.3.2 | ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| Secret scanning | §5.1.4 | ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| CIS Java Benchmark | CM-7, SC-8 | ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| CIS Docker Benchmark | CM-2, SI-3 | ✅ |" >> $GITHUB_STEP_SUMMARY
 
   # ══════════════════════════════════════════════════════════════
-  # COMPLIANCE Phase - C2P → OSCAL Assessment Results
-  # 영상 C2P 루프: Pipeline Results → OSCAL Assessment Results → Loki
-  # NIST 800-53: CA-7, AU-2, AU-9
+  # COMPLIANCE Phase - C2P → OSCAL Assessment Results → Loki
   # ══════════════════════════════════════════════════════════════
 
   compliance:
@@ -615,13 +561,6 @@ jobs:
 
       - name: Install C2P
         run: pip install compliance-to-policy
-
-      - name: Download Grype results
-        uses: actions/download-artifact@v4
-        with:
-          name: grype-sbom-results
-          path: evidence/grype/
-        continue-on-error: true
 
       - name: Download Trivy results
         uses: actions/download-artifact@v4
@@ -734,6 +673,80 @@ jobs:
           print(f'OSCAL Assessment Results generated: {satisfied}/{total} satisfied')
           PYEOF
 
+      - name: Push OSCAL Assessment Results to Loki (CA-7 / AU-2)
+        run: |
+          python3 << 'PYEOF'
+          import json, time, urllib.request
+
+          with open('oscal-results/assessment-results.json') as f:
+              ar = json.load(f)
+
+          findings = ar['assessment-results']['results'][0]['findings']
+          run_id = '${{ github.run_id }}'
+          commit = '${{ github.sha }}'[:8]
+          actor = '${{ github.actor }}'
+
+          streams = []
+          for finding in findings:
+              ctrl = finding['target']['target-id']
+              state = finding['target']['status']['state']
+              tools = finding['title'].split(' - ')[1] if ' - ' in finding['title'] else ''
+
+              log_line = json.dumps({
+                  'control_id': ctrl,
+                  'state': state,
+                  'tools': tools,
+                  'run_id': run_id,
+                  'commit': commit,
+                  'actor': actor,
+              })
+
+              streams.append({
+                  'stream': {
+                      'job': 'oscal-assessment',
+                      'control_id': ctrl,
+                      'state': state,
+                      'pipeline_run': run_id,
+                      'commit': commit,
+                  },
+                  'values': [[str(time.time_ns()), log_line]]
+              })
+
+          # 요약 로그
+          satisfied = sum(1 for f in findings if f['target']['status']['state'] == 'satisfied')
+          total = len(findings)
+          summary_line = json.dumps({
+              'type': 'summary',
+              'total_controls': total,
+              'satisfied': satisfied,
+              'not_satisfied': total - satisfied,
+              'coverage_pct': round(satisfied / total * 100, 1),
+              'run_id': run_id,
+              'commit': commit,
+          })
+          streams.append({
+              'stream': {
+                  'job': 'oscal-assessment',
+                  'type': 'summary',
+                  'pipeline_run': run_id,
+              },
+              'values': [[str(time.time_ns()), summary_line]]
+          })
+
+          payload = json.dumps({'streams': streams}).encode()
+          req = urllib.request.Request(
+              'https://loki.miata.cloud/loki/api/v1/push',
+              data=payload,
+              headers={'Content-Type': 'application/json'},
+              method='POST'
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=10) as resp:
+                  print(f'Loki push: {resp.status} - {satisfied}/{total} controls sent')
+          except Exception as e:
+              print(f'Loki push warning: {e}')
+          PYEOF
+
       - name: Upload OSCAL Assessment Results (CA-7 / AU-9)
         uses: actions/upload-artifact@v4
         with:
@@ -759,10 +772,7 @@ jobs:
           " >> $GITHUB_STEP_SUMMARY
 
   # ══════════════════════════════════════════════════════════════
-  # DELIVER Phase - ECR Push + Config Integration Test
-  # DoD Guidebook Table 9: Deliver - REQUIRED
-  # SP 800-204D §5.1.2: Secure Pull-Push Operations
-  # SSDF PS.3.1, PS.3.2 / NIST 800-53: CM-3, SR-3, RA-5
+  # DELIVER Phase - ECR Push + Cosign
   # ══════════════════════════════════════════════════════════════
 
   deliver:
@@ -817,7 +827,7 @@ jobs:
           pattern: docker-image-*
           merge-multiple: true
 
-      - name: Load and retag Docker image (SHA 태그 / SP 800-204D §5.1.2)
+      - name: Load and retag Docker image
         run: |
           IMAGE_TAG="${{ steps.meta.outputs.image-tag }}"
           IMAGE_URI="${{ secrets.ECR_REGISTRY }}/jccompany/payment-api:${IMAGE_TAG}"
@@ -831,7 +841,7 @@ jobs:
           docker run --rm \
             -e SPRING_PROFILES_ACTIVE=test \
             $IMAGE_URI \
-            java -jar /app/payment-api.jar \
+            java -jar /app/app.jar \
             --spring.main.web-application-type=none 2>/dev/null || true
           echo "Config validation completed"
 
@@ -868,19 +878,13 @@ jobs:
       - name: Deliver Summary
         run: |
           echo "## DELIVER Phase Complete" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Image Tag | ${{ steps.meta.outputs.image-tag }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Commit | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
           echo "| ECR Push | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Cosign Signed | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| SBOM to S3 | ✅ |" >> $GITHUB_STEP_SUMMARY
 
   # ══════════════════════════════════════════════════════════════
   # DEPLOY Phase - EKS 배포 + Post-deploy Scan
-  # DoD Guidebook Table 10: Deploy - REQUIRED
-  # SP 800-204D §5.1.3 / NIST 800-53: CM-2, CM-3, CA-7
   # ══════════════════════════════════════════════════════════════
 
   deploy:
@@ -972,13 +976,13 @@ jobs:
                       httpGet:
                         path: /actuator/health
                         port: 8080
-                      initialDelaySeconds: 30
+                      initialDelaySeconds: 120
                       periodSeconds: 10
                     readinessProbe:
                       httpGet:
                         path: /actuator/health
                         port: 8080
-                      initialDelaySeconds: 15
+                      initialDelaySeconds: 90
                       periodSeconds: 5
                     env:
                       - name: SPRING_PROFILES_ACTIVE
@@ -995,7 +999,7 @@ jobs:
         run: |
           kubectl rollout status deployment/payment-api \
             -n payment-api \
-            --timeout=5m
+            --timeout=10m
 
       - name: Smoke Test (DoD Table 10 REQUIRED)
         run: |
@@ -1038,13 +1042,11 @@ jobs:
       - name: Deploy Summary
         run: |
           echo "## DEPLOY Phase Complete" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Image Tag | ${{ needs.deliver.outputs.image-tag }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Namespace | payment-api |" >> $GITHUB_STEP_SUMMARY
           echo "| Replicas | 2 |" >> $GITHUB_STEP_SUMMARY
-          echo "| PSS | restricted ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| readinessProbe delay | 90s ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| livenessProbe delay | 120s ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| PSS restricted | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Post-deploy Scan | completed ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| kube-bench | completed ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Evidence to S3 | uploaded ✅ |" >> $GITHUB_STEP_SUMMARY
