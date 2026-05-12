@@ -983,6 +983,12 @@ jobs:
                     env:
                       - name: SPRING_PROFILES_ACTIVE
                         value: prod
+                    volumeMounts:
+                      - name: tmp-dir
+                        mountPath: /tmp
+                volumes:
+                  - name: tmp-dir
+                    emptyDir: {}
           MANIFEST
 
       - name: Wait for rollout (CM-3)
