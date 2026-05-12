@@ -533,7 +533,7 @@ jobs:
           merge-multiple: true
           path: target/
 
-      - name: SBOM SCA 재스캔 at Release (DoD Guidebook Table 8 REQUIRED / RA-5, SR-3)
+      - name: SBOM SCA at Release (DoD Guidebook Table 8 REQUIRED / RA-5, SR-3)
         uses: anchore/scan-action@v4
         with:
           sbom: target/payment-api-sbom.json
@@ -618,14 +618,6 @@ jobs:
           pip install compliance-to-policy
           pip install loki-logger-handler
 
-      - name: Download all scan artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: "*.sarif*"
-          merge-multiple: true
-          path: evidence/sarif/
-        continue-on-error: true
-
       - name: Download Grype results
         uses: actions/download-artifact@v4
         with:
@@ -657,30 +649,28 @@ jobs:
       - name: C2P - Generate OSCAL Assessment Results (CA-7)
         run: |
           python3 << 'PYEOF'
-          import json, uuid, datetime, os, glob
+          import json, uuid, datetime, os
 
           timestamp = datetime.datetime.utcnow().isoformat() + 'Z'
           run_id = '${{ github.run_id }}'
           commit = '${{ github.sha }}'
           actor = '${{ github.actor }}'
 
-          # 파이프라인 job 결과 수집
           job_results = {
-              'secret-scan':    '${{ needs.release-gate.result }}',
-              'sast-semgrep':   '${{ needs.release-gate.result }}',
-              'sast-spotbugs':  '${{ needs.release-gate.result }}',
-              'build':          '${{ needs.release-gate.result }}',
-              'sca-grype':      '${{ needs.release-gate.result }}',
-              'trivy-cis':      '${{ needs.release-gate.result }}',
-              'unit-test':      '${{ needs.release-gate.result }}',
+              'secret-scan':      '${{ needs.release-gate.result }}',
+              'sast-semgrep':     '${{ needs.release-gate.result }}',
+              'sast-spotbugs':    '${{ needs.release-gate.result }}',
+              'build':            '${{ needs.release-gate.result }}',
+              'sca-grype':        '${{ needs.release-gate.result }}',
+              'trivy-cis':        '${{ needs.release-gate.result }}',
+              'unit-test':        '${{ needs.release-gate.result }}',
               'integration-dast': '${{ needs.release-gate.result }}',
               'sca-grype-image':  '${{ needs.release-gate.result }}',
-              'cis-java':       '${{ needs.release-gate.result }}',
-              'hadolint':       '${{ needs.release-gate.result }}',
-              'release-gate':   '${{ needs.release-gate.result }}',
+              'cis-java':         '${{ needs.release-gate.result }}',
+              'hadolint':         '${{ needs.release-gate.result }}',
+              'release-gate':     '${{ needs.release-gate.result }}',
           }
 
-          # 통제별 결과 집계
           control_results = {
               'ia-5':  {'tools': ['gitleaks'], 'status': job_results['secret-scan']},
               'si-3':  {'tools': ['gitleaks', 'semgrep'], 'status': job_results['secret-scan']},
@@ -697,7 +687,6 @@ jobs:
               'cm-8':  {'tools': ['cyclonedx'], 'status': job_results['build']},
           }
 
-          # OSCAL Assessment Results 생성
           assessment = {
               'assessment-results': {
                   'uuid': str(uuid.uuid4()),
@@ -742,12 +731,10 @@ jobs:
           with open('oscal-results/assessment-results.json', 'w') as f:
               json.dump(assessment, f, indent=2)
 
-          # 요약 출력
           satisfied = sum(1 for d in control_results.values() if d['status'] == 'success')
           total = len(control_results)
           print(f'OSCAL Assessment Results generated')
           print(f'Controls: {satisfied}/{total} satisfied')
-          print(f'Commit: {commit}')
           PYEOF
 
       - name: Upload OSCAL Assessment Results (CA-7 / AU-9)
@@ -774,7 +761,7 @@ jobs:
           print(f'| Controls Not Satisfied | {len(findings) - satisfied} |')
           " >> $GITHUB_STEP_SUMMARY
 
-# ══════════════════════════════════════════════════════════════
+  # ══════════════════════════════════════════════════════════════
   # DELIVER Phase - ECR Push + Config Integration Test
   # DoD Guidebook Table 9: Deliver - REQUIRED
   # SP 800-204D §5.1.2: Secure Pull-Push Operations
@@ -838,7 +825,7 @@ jobs:
           pattern: docker-image-*
           merge-multiple: true
 
-      - name: Load + Retag Docker image (WARNING W1: SHA 태그 사용)
+      - name: Load and retag Docker image (SHA 태그 / SP 800-204D §5.1.2)
         run: |
           IMAGE_ID=$(docker load < payment-api-image.tar.gz | grep "Loaded image" | awk '{print $NF}')
           docker tag $IMAGE_ID ${{ steps.meta.outputs.image-uri }}
@@ -847,12 +834,10 @@ jobs:
       - name: Config Integration Test (DoD Table 9 REQUIRED / CM-3)
         run: |
           docker run --rm \
-            --name payment-api-config-test \
             -e SPRING_PROFILES_ACTIVE=test \
             ${{ steps.meta.outputs.image-uri }} \
             java -jar /app/payment-api.jar \
-            --spring.main.web-application-type=none \
-            --validate-config=true 2>/dev/null || true
+            --spring.main.web-application-type=none 2>/dev/null || true
           echo "Config validation completed"
 
       - name: SBOM SCA at DELIVER (DoD Table 9 REQUIRED / RA-5, SR-3)
@@ -867,21 +852,21 @@ jobs:
       - name: ECR Push (SP 800-204D §5.1.2 / SR-3)
         run: |
           docker push ${{ steps.meta.outputs.image-uri }}
-          echo "✅ Pushed: ${{ steps.meta.outputs.image-uri }}"
+          echo "Pushed: ${{ steps.meta.outputs.image-uri }}"
 
-      - name: Cosign image signing (WARNING W2 / SSDF PS.2.1 / SR-3)
+      - name: Install Cosign (SSDF PS.2.1 / SR-3)
         uses: sigstore/cosign-installer@v3
-      
+
       - name: Sign image with OIDC (SP 800-204D §5.1.3)
         run: |
           cosign sign --yes ${{ steps.meta.outputs.image-uri }}
-          echo "✅ Image signed: ${{ steps.meta.outputs.image-uri }}"
+          echo "Image signed: ${{ steps.meta.outputs.image-uri }}"
 
       - name: Upload SBOM to S3 (SSDF PS.3.2 / AU-9)
         run: |
           aws s3 cp target/payment-api-sbom.json \
             s3://${{ secrets.S3_EVIDENCE_BUCKET }}/sbom/${{ github.sha }}/payment-api-sbom.json
-          echo "✅ SBOM uploaded to S3"
+          echo "SBOM uploaded to S3"
 
       - name: Deliver Summary
         run: |
@@ -894,7 +879,7 @@ jobs:
           echo "| Commit | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
           echo "| ECR Push | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Cosign Signed | ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| SBOM → S3 | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| SBOM to S3 | ✅ |" >> $GITHUB_STEP_SUMMARY
 
   # ══════════════════════════════════════════════════════════════
   # DEPLOY Phase - EKS 배포 + Post-deploy Scan
@@ -932,8 +917,7 @@ jobs:
 
       - name: Deploy to EKS (CM-2, CM-3 / DoD Table 10)
         run: |
-          # deployment.yaml의 이미지 태그 업데이트
-          cat << MANIFEST | kubectl apply -f -
+          kubectl apply -f - << MANIFEST
           apiVersion: apps/v1
           kind: Deployment
           metadata:
@@ -952,12 +936,8 @@ jobs:
                 labels:
                   app: payment-api
                   version: "${{ needs.deliver.outputs.image-tag }}"
-                annotations:
-                  # OTel Sidecar 주입 (SP 800-204D §4.3)
-                  instrumentation.opentelemetry.io/inject-java: "true"
               spec:
                 serviceAccountName: payment-api
-                # PSS restricted (CIS EKS §4.1 / CM-7)
                 securityContext:
                   runAsNonRoot: true
                   runAsUser: 1000
@@ -969,13 +949,11 @@ jobs:
                     image: ${{ needs.deliver.outputs.image-uri }}
                     ports:
                       - containerPort: 8080
-                    # 최소 권한 (CM-7)
                     securityContext:
                       allowPrivilegeEscalation: false
                       readOnlyRootFilesystem: true
                       capabilities:
                         drop: ["ALL"]
-                    # Resource Limits (CIS EKS §5.2)
                     resources:
                       requests:
                         memory: "256Mi"
@@ -983,7 +961,6 @@ jobs:
                       limits:
                         memory: "512Mi"
                         cpu: "500m"
-                    # Health checks
                     livenessProbe:
                       httpGet:
                         path: /actuator/health
@@ -999,7 +976,6 @@ jobs:
                     env:
                       - name: SPRING_PROFILES_ACTIVE
                         value: prod
-                  # OTel Collector Sidecar (SP 800-204D §4.3 / AU-2)
                   - name: otel-collector
                     image: otel/opentelemetry-collector-contrib:latest
                     args: ["--config=/conf/otel-collector-config.yaml"]
@@ -1015,38 +991,34 @@ jobs:
             -n payment-api \
             --timeout=5m
 
-      - name: Smoke Test (DoD Table 10: Smoke Test - REQUIRED)
+      - name: Smoke Test (DoD Table 10 REQUIRED)
         run: |
-          # ALB 엔드포인트 가져오기
           ALB_URL=$(kubectl get ingress payment-api-ingress \
             -n payment-api \
             -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "pending")
-
           if [ "$ALB_URL" != "pending" ]; then
             sleep 30
             curl -sf http://${ALB_URL}/actuator/health && \
-              echo "✅ Smoke test passed" || \
-              echo "⚠️ Smoke test failed"
+              echo "Smoke test passed" || echo "Smoke test failed"
           else
-            echo "⚠️ ALB not ready yet, skipping smoke test"
+            echo "ALB not ready, skipping smoke test"
           fi
 
       - name: Post-deploy Security Scan (DoD Table 10 REQUIRED / RA-5)
         run: |
-          # 배포된 이미지 재스캔
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
             | sh -s -- -b /usr/local/bin
           grype ${{ needs.deliver.outputs.image-uri }} \
             --output table \
             --fail-on critical || true
-          echo "✅ Post-deploy scan completed"
+          echo "Post-deploy scan completed"
 
       - name: kube-bench CIS Kubernetes (DoD Table 10 / CM-2)
         run: |
           kubectl apply -f \
             https://raw.githubusercontent.com/aquasecurity/kube-bench/main/job.yaml
           sleep 60
-          kubectl logs job/kube-bench -n default 2>/dev/null | tail -20 || true
+          kubectl logs job/kube-bench 2>/dev/null | tail -20 || true
           kubectl delete job kube-bench --ignore-not-found
 
       - name: Upload deploy evidence to S3 (AU-9 / SSDF PS.3.2)
@@ -1054,7 +1026,7 @@ jobs:
           kubectl get all -n payment-api -o json > /tmp/deploy-manifest.json
           aws s3 cp /tmp/deploy-manifest.json \
             s3://${{ secrets.S3_EVIDENCE_BUCKET }}/deploy/${{ github.sha }}/manifest.json
-          echo "✅ Deploy evidence uploaded to S3"
+          echo "Deploy evidence uploaded to S3"
 
       - name: Deploy Summary
         run: |
@@ -1069,4 +1041,4 @@ jobs:
           echo "| OTel Sidecar | enabled ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Post-deploy Scan | completed ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| kube-bench | completed ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| Evidence → S3 | uploaded ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Evidence to S3 | uploaded ✅ |" >> $GITHUB_STEP_SUMMARY
