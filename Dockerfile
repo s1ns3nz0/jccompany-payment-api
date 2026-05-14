@@ -19,11 +19,9 @@ WORKDIR /app
 RUN groupadd -r appuser && useradd -r -g appuser appuser
 USER appuser:appuser
 
-# OTel Java Agent 복사
 COPY --from=otel-agent --chown=appuser:appuser \
     /opentelemetry-javaagent.jar opentelemetry-javaagent.jar
 
-# 앱 복사
 COPY --from=builder --chown=appuser:appuser \
     /app/target/payment-api-1.0.0-SNAPSHOT.jar app.jar
 
@@ -40,4 +38,5 @@ ENTRYPOINT ["java", \
     "-Dotel.logs.exporter=otlp", \
     "-Dotel.metrics.exporter=otlp", \
     "-Dotel.traces.exporter=otlp", \
+    "-Dotel.instrumentation.logback-appender.enabled=true", \
     "-jar", "app.jar"]
