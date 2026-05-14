@@ -1,0 +1,14 @@
+# Checkov 설정 (SP 800-204D / CM-6)
+compact: true
+quiet: false
+soft-fail: true
+framework:
+  - kubernetes
+  - dockerfile
+skip-check:
+  - CKV_K8S_8   # liveness probe (이미 설정됨, 타입 감지 오류)
+  - CKV_K8S_9   # readiness probe (이미 설정됨)
+  - CKV_K8S_43  # image tag pinning (ECR immutable로 대체)
+output:
+  - cli
+  - json

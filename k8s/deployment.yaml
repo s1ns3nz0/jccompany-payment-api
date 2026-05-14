@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-api
+  namespace: payment-api
+  labels:
+    app: payment-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: payment-api
+  template:
+    metadata:
+      labels:
+        app: payment-api
+    spec:
+      serviceAccountName: payment-api
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: payment-api
+          image: PLACEHOLDER
+          ports:
+            - containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 120
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 90
+            periodSeconds: 5
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: prod
+          volumeMounts:
+            - name: tmp-dir
+              mountPath: /tmp
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.96.0
+          args: ["--config=/conf/otel-collector-config.yaml"]
+          ports:
+            - containerPort: 4317
+            - containerPort: 4318
+          resources:
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: otel-config
+              mountPath: /conf
+            - name: otel-tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp-dir
+          emptyDir: {}
+        - name: otel-config
+          configMap:
+            name: otel-collector-config
+        - name: otel-tmp
+          emptyDir: {}

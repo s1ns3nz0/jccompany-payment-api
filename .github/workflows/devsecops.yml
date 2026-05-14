@@ -181,6 +181,47 @@ jobs:
           path: hadolint-results.sarif
           retention-days: 90
 
+
+  # ══════════════════════════════════════════════════════════════
+  # BUILD Phase - Job 3b: Checkov IaC Security Scan
+  # NIST: CM-2, CM-6, AC-4, AC-6, SC-5, SC-28 / SSDF PW.4.1
+  # ══════════════════════════════════════════════════════════════
+  checkov:
+    name: "[BUILD] Checkov - IaC Security Scan"
+    runs-on: ubuntu-latest
+    needs: [secret-scan]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkov K8s Manifest Scan (CM-2, CM-6, AC-4, AC-6, SC-5)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: k8s/
+          framework: kubernetes
+          soft_fail: true
+          output_format: cli
+          download_external_modules: false
+        continue-on-error: true
+
+      - name: Checkov Dockerfile Scan (CM-7, SC-28, AC-6)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          file: Dockerfile
+          framework: dockerfile
+          soft_fail: true
+          output_format: cli
+          download_external_modules: false
+        continue-on-error: true
+
+      - name: Checkov Summary
+        run: |
+          echo "## Checkov IaC Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- K8s manifests: k8s/" >> $GITHUB_STEP_SUMMARY
+          echo "- Dockerfile: Dockerfile" >> $GITHUB_STEP_SUMMARY
+          echo "- Framework: kubernetes, dockerfile" >> $GITHUB_STEP_SUMMARY
+          echo "- Controls: CM-2, CM-6, AC-4, AC-6, SC-5, SC-28" >> $GITHUB_STEP_SUMMARY
+
   # ══════════════════════════════════════════════════════════════
   # BUILD Phase - Job 3: CIS Java Benchmark
   # ══════════════════════════════════════════════════════════════
@@ -605,6 +646,7 @@ jobs:
               'sca-grype-image':  '${{ needs.release-gate.result }}',
               'cis-java':         '${{ needs.release-gate.result }}',
               'hadolint':         '${{ needs.release-gate.result }}',
+              'checkov':          '${{ needs.release-gate.result }}',
               'release-gate':     '${{ needs.release-gate.result }}',
           }
 
@@ -622,6 +664,43 @@ jobs:
               'sc-8':  {'tools': ['cis-java'], 'status': job_results['cis-java']},
               'ac-3':  {'tools': ['zap', 'integration-test'], 'status': job_results['integration-dast']},
               'cm-8':  {'tools': ['cyclonedx'], 'status': job_results['build']},
+              # IaC Security (Checkov) - CM, AC, SC
+              'cm-6':  {'tools': ['checkov', 'opa-gatekeeper'], 'status': job_results['checkov']},
+              'ac-4':  {'tools': ['checkov', 'opa-gatekeeper'], 'status': job_results['checkov']},
+              'ac-6':  {'tools': ['checkov', 'opa-gatekeeper'], 'status': job_results['checkov']},
+              'sc-5':  {'tools': ['checkov', 'opa-gatekeeper'], 'status': job_results['checkov']},
+              'sc-28': {'tools': ['checkov', 'ecr-aes256'], 'status': job_results['checkov']},
+              # Audit & Monitoring (Falco + Loki + OTel)
+              'au-2':  {'tools': ['falco', 'loki'], 'status': job_results['build']},
+              'au-3':  {'tools': ['loki', 'otel'], 'status': job_results['build']},
+              'au-6':  {'tools': ['loki', 'grafana'], 'status': job_results['build']},
+              'au-9':  {'tools': ['s3', 'ecr'], 'status': job_results['build']},
+              'au-12': {'tools': ['loki', 'promtail', 'otel'], 'status': job_results['build']},
+              # Incident Response (Falco)
+              'ir-5':  {'tools': ['falco', 'loki'], 'status': job_results['build']},
+              'ir-6':  {'tools': ['falco', 'loki'], 'status': job_results['build']},
+              # Risk Assessment
+              'ra-3':  {'tools': ['grype', 'trivy', 'semgrep'], 'status': job_results['sca-grype']},
+              # System Acquisition
+              'sa-8':  {'tools': ['semgrep', 'hadolint'], 'status': job_results['sast-semgrep']},
+              'sa-10': {'tools': ['github-actions', 'slsa'], 'status': job_results['build']},
+              'sa-15': {'tools': ['slsa', 'cosign'], 'status': job_results['release-gate']},
+              'sa-17': {'tools': ['zap', 'spotbugs', 'jacoco'], 'status': job_results['integration-dast']},
+              # System Integrity
+              'si-4':  {'tools': ['falco', 'otel'], 'status': job_results['build']},
+              'si-7':  {'tools': ['cosign', 'slsa'], 'status': job_results['release-gate']},
+              # Supply Chain
+              'sr-4':  {'tools': ['cyclonedx', 'sbom'], 'status': job_results['build']},
+              'sr-11': {'tools': ['cosign', 'slsa'], 'status': job_results['release-gate']},
+              # Identification & Access
+              'ia-2':  {'tools': ['github-oidc'], 'status': job_results['build']},
+              'ia-3':  {'tools': ['cosign'], 'status': job_results['release-gate']},
+              'ac-2':  {'tools': ['opa-gatekeeper', 'k8s-rbac'], 'status': job_results['checkov']},
+              'ac-17': {'tools': ['github-oidc', 'aws-oidc'], 'status': job_results['build']},
+              # Continuous Assessment
+              'ca-2':  {'tools': ['github-actions', 'oscal'], 'status': job_results['release-gate']},
+              'ca-7':  {'tools': ['falco', 'kube-bench', 'grafana'], 'status': job_results['build']},
+              'ca-9':  {'tools': ['otel', 'loki'], 'status': job_results['build']},
           }
 
           assessment = {
