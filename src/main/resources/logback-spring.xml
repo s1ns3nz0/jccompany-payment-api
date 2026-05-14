@@ -1,34 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
 
-  <!-- Promtail용 stdout 유지 (AU-2: 감사 로그) -->
+  <!-- stdout (Promtail 수집용 / AU-2) -->
   <appender name="console" class="ch.qos.logback.core.ConsoleAppender">
     <encoder>
       <pattern>%d{yyyy-MM-dd'T'HH:mm:ss.SSS'Z', UTC} %5level [%thread] %logger{36} : %msg%n</pattern>
     </encoder>
   </appender>
 
-  <!-- OTel Collector sidecar로 로그 전송 (SP 800-204D §4.3) -->
-  <appender name="OpenTelemetry"
-    class="io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender">
-    <captureExperimentalAttributes>true</captureExperimentalAttributes>
-    <captureCodeAttributes>true</captureCodeAttributes>
-    <captureMdcAttributes>*</captureMdcAttributes>
-  </appender>
+  <!-- OTel Java Agent가 자동으로 OTLP 브릿징 처리 (SP 800-204D §4.3) -->
 
-  <!-- payment-api 로거 -->
   <logger name="com.jccompany" level="INFO" additivity="false">
     <appender-ref ref="console" />
-    <appender-ref ref="OpenTelemetry" />
   </logger>
 
-  <!-- Spring 로거 -->
   <logger name="org.springframework.web" level="INFO" additivity="false">
     <appender-ref ref="console" />
-    <appender-ref ref="OpenTelemetry" />
   </logger>
 
-  <!-- root: stdout만 (OTel 중복 방지) -->
   <root level="WARN">
     <appender-ref ref="console" />
   </root>
