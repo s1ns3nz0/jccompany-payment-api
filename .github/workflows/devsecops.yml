@@ -753,6 +753,7 @@ jobs:
         run: |
           python3 << 'PYEOF'
           import json, time, urllib.request
+          from collections import defaultdict
 
           with open('oscal-results/assessment-results.json') as f:
               ar = json.load(f)
@@ -764,16 +765,52 @@ jobs:
           repo = '${{ github.repository }}'
           actions_url = f'https://github.com/{repo}/actions/runs/{run_id}'
 
+          # 통제 → 파이프라인 단계 매핑
+          control_phases = {
+              'ia-5': 'DEVELOP', 'si-3': 'DEVELOP',
+              'sa-11': 'BUILD', 'si-10': 'BUILD', 'sc-13': 'BUILD',
+              'sr-3': 'BUILD', 'cm-7': 'BUILD', 'sc-8': 'BUILD',
+              'cm-8': 'BUILD', 'cm-6': 'BUILD', 'ac-4': 'BUILD',
+              'ac-6': 'BUILD', 'sc-5': 'BUILD', 'sc-28': 'BUILD',
+              'sa-8': 'BUILD', 'sa-10': 'BUILD', 'sr-4': 'BUILD',
+              'ac-2': 'BUILD',
+              'ra-5': 'TEST', 'si-2': 'TEST', 'cm-2': 'TEST',
+              'ac-3': 'TEST', 'ra-3': 'TEST', 'sa-17': 'TEST',
+              'sa-15': 'RELEASE', 'si-7': 'RELEASE', 'sr-11': 'RELEASE',
+              'ca-2': 'RELEASE',
+              'ia-2': 'DELIVER', 'ia-3': 'DELIVER', 'ac-17': 'DELIVER',
+              'ca-7': 'DEPLOY',
+              'au-2': 'RUNTIME', 'au-3': 'RUNTIME', 'au-6': 'RUNTIME',
+              'au-9': 'RUNTIME', 'au-12': 'RUNTIME',
+              'ir-5': 'RUNTIME', 'ir-6': 'RUNTIME',
+              'si-4': 'RUNTIME', 'ca-9': 'RUNTIME',
+          }
+
           streams = []
+          tool_counts = defaultdict(int)
+          phase_counts = defaultdict(lambda: {'satisfied': 0, 'total': 0})
+
           for finding in findings:
               ctrl = finding['target']['target-id']
               state = finding['target']['status']['state']
               family = ctrl.split('-')[0].upper()
+              phase = control_phases.get(ctrl, 'OTHER')
               tools = finding['title'].split(' - ')[1] if ' - ' in finding['title'] else ''
+
+              # 도구별 카운트 집계
+              for tool in eval(tools) if tools.startswith('[') else [tools]:
+                  if tool.strip():
+                      tool_counts[tool.strip()] += 1
+
+              # 단계별 카운트 집계
+              phase_counts[phase]['total'] += 1
+              if state == 'satisfied':
+                  phase_counts[phase]['satisfied'] += 1
 
               log_line = json.dumps({
                   'control_id': ctrl,
                   'family': family,
+                  'phase': phase,
                   'state': state,
                   'tools': tools,
                   'run_id': run_id,
@@ -787,6 +824,7 @@ jobs:
                       'job': 'oscal-assessment',
                       'control_id': ctrl,
                       'family': family,
+                      'phase': phase,
                       'state': state,
                       'pipeline_run': run_id,
                       'commit': commit,
@@ -796,6 +834,8 @@ jobs:
 
           satisfied = sum(1 for f in findings if f['target']['status']['state'] == 'satisfied')
           total = len(findings)
+
+          # 전체 summary
           summary_line = json.dumps({
               'type': 'summary',
               'total_controls': total,
@@ -815,6 +855,45 @@ jobs:
               'values': [[str(time.time_ns()), summary_line]]
           })
 
+          # 도구별 summary
+          for tool, count in sorted(tool_counts.items()):
+              tool_line = json.dumps({
+                  'type': 'tool-summary',
+                  'tool': tool,
+                  'controls_covered': count,
+                  'run_id': run_id,
+                  'commit': commit,
+              })
+              streams.append({
+                  'stream': {
+                      'job': 'oscal-assessment',
+                      'type': 'tool-summary',
+                      'tool': tool,
+                      'pipeline_run': run_id,
+                  },
+                  'values': [[str(time.time_ns()), tool_line]]
+              })
+
+          # 단계별 summary
+          for phase, counts in sorted(phase_counts.items()):
+              phase_line = json.dumps({
+                  'type': 'phase-summary',
+                  'phase': phase,
+                  'total': counts['total'],
+                  'satisfied': counts['satisfied'],
+                  'run_id': run_id,
+                  'commit': commit,
+              })
+              streams.append({
+                  'stream': {
+                      'job': 'oscal-assessment',
+                      'type': 'phase-summary',
+                      'phase': phase,
+                      'pipeline_run': run_id,
+                  },
+                  'values': [[str(time.time_ns()), phase_line]]
+              })
+
           payload = json.dumps({'streams': streams}).encode()
           req = urllib.request.Request(
               'https://loki.miata.cloud/loki/api/v1/push',
@@ -824,7 +903,8 @@ jobs:
           )
           try:
               with urllib.request.urlopen(req, timeout=10) as resp:
-                  print(f'Loki push: {resp.status} - {satisfied}/{total} controls sent')
+                  print(f'Loki push: {resp.status} - {satisfied}/{total} controls')
+                  print(f'  Tools: {len(tool_counts)} | Phases: {len(phase_counts)}')
           except Exception as e:
               print(f'Loki push warning: {e}')
           PYEOF
