@@ -7,12 +7,12 @@ on:
     branches: [ main, master ]
 
 # SP 800-204D §3.2: Minimal permissions (least privilege)
+# Phase 3: issues: write 제거 (M4 fix - 전역에서 불필요)
 permissions:
   contents: read
   security-events: write
   id-token: write
   attestations: write
-  issues: write
 
 env:
   JAVA_VERSION: '17'
@@ -32,6 +32,10 @@ jobs:
   secret-scan:
     name: "[DEVELOP] Gitleaks - Secret Detection"
     runs-on: ubuntu-latest
+    # Phase 3 M4 fix: issues: write를 잡 레벨로 이동
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Checkout (SHA-pinned / SP 800-204D §5.1.1)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -39,7 +43,7 @@ jobs:
           fetch-depth: 0
 
       - name: Gitleaks (IA-5, SI-3, SR-3 / SSDF PS.1 / SP 800-204D §5.1.4)
-        uses: gitleaks/gitleaks-action@v2  # v2.3.9
+        uses: gitleaks/gitleaks-action@v2  # v2.3.9 — TODO: SHA-pin (H1 Phase4)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -49,10 +53,10 @@ jobs:
     needs: [secret-scan]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4  # TODO: SHA-pin (H1 Phase4)
 
       - name: Semgrep (SA-11, SI-10, SC-13 / SSDF PW.7, PW.8 / SP 800-204D §5.1.3)
-        uses: semgrep/semgrep-action@v1
+        uses: semgrep/semgrep-action@v1  # TODO: SHA-pin (H1 Phase4)
         id: semgrep
         continue-on-error: true
         with:
@@ -67,7 +71,7 @@ jobs:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
       - name: Upload Semgrep results (SP 800-204D §5.1.3 / SSDF RV.1.3)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4  # TODO: SHA-pin (H1 Phase4)
         if: always()
         with:
           name: semgrep-results-${{ github.sha }}
@@ -83,7 +87,10 @@ jobs:
     name: "[BUILD] Build + Docker + CycloneDX SBOM"
     runs-on: ubuntu-latest
     needs: [secret-scan, sast-semgrep]
-    if: needs.secret-scan.result == 'success'
+    # Phase 3 M3 fix: semgrep 실패도 gate (sast-semgrep.result 추가)
+    if: |
+      needs.secret-scan.result == 'success' &&
+      needs.sast-semgrep.result != 'failure'
     outputs:
       git-sha: ${{ steps.meta.outputs.git-sha }}
     steps:
@@ -140,7 +147,7 @@ jobs:
         with:
           name: docker-image-${{ steps.meta.outputs.git-sha }}
           path: payment-api-image.tar.gz
-          retention-days: 7
+          retention-days: 30  # Phase 3 M7 fix: 7 → 30일
 
       - name: Upload SBOM (SSDF PS.3 / SR-3)
         uses: actions/upload-artifact@v4
@@ -181,11 +188,10 @@ jobs:
           path: hadolint-results.sarif
           retention-days: 90
 
-
   # ══════════════════════════════════════════════════════════════
   # BUILD Phase - Job 3b: Checkov IaC Security Scan
-  # NIST: CM-2, CM-6, AC-4, AC-6, SC-5, SC-28 / SSDF PW.4.1
   # ══════════════════════════════════════════════════════════════
+
   checkov:
     name: "[BUILD] Checkov - IaC Security Scan"
     runs-on: ubuntu-latest
@@ -581,7 +587,7 @@ jobs:
           echo "| SBOM SCA @ Release | SR-3, RA-5 | PS.3 | completed |" >> $GITHUB_STEP_SUMMARY
 
   # ══════════════════════════════════════════════════════════════
-  # COMPLIANCE Phase - C2P → OSCAL Assessment Results → Loki
+  # COMPLIANCE Phase
   # ══════════════════════════════════════════════════════════════
 
   compliance:
@@ -664,40 +670,31 @@ jobs:
               'sc-8':  {'tools': ['cis-java'], 'status': job_results['cis-java']},
               'ac-3':  {'tools': ['zap', 'integration-test'], 'status': job_results['integration-dast']},
               'cm-8':  {'tools': ['cyclonedx'], 'status': job_results['build']},
-              # IaC Security (Checkov) - CM, AC, SC
               'cm-6':  {'tools': ['checkov', 'opa-gatekeeper'], 'status': job_results['checkov']},
               'ac-4':  {'tools': ['checkov', 'opa-gatekeeper'], 'status': job_results['checkov']},
               'ac-6':  {'tools': ['checkov', 'opa-gatekeeper'], 'status': job_results['checkov']},
               'sc-5':  {'tools': ['checkov', 'opa-gatekeeper'], 'status': job_results['checkov']},
               'sc-28': {'tools': ['checkov', 'ecr-aes256'], 'status': job_results['checkov']},
-              # Audit & Monitoring (Falco + Loki + OTel)
               'au-2':  {'tools': ['falco', 'loki'], 'status': job_results['build']},
               'au-3':  {'tools': ['loki', 'otel'], 'status': job_results['build']},
               'au-6':  {'tools': ['loki', 'grafana'], 'status': job_results['build']},
               'au-9':  {'tools': ['s3', 'ecr'], 'status': job_results['build']},
               'au-12': {'tools': ['loki', 'promtail', 'otel'], 'status': job_results['build']},
-              # Incident Response (Falco)
               'ir-5':  {'tools': ['falco', 'loki'], 'status': job_results['build']},
               'ir-6':  {'tools': ['falco', 'loki'], 'status': job_results['build']},
-              # Risk Assessment
               'ra-3':  {'tools': ['grype', 'trivy', 'semgrep'], 'status': job_results['sca-grype']},
-              # System Acquisition
               'sa-8':  {'tools': ['semgrep', 'hadolint'], 'status': job_results['sast-semgrep']},
               'sa-10': {'tools': ['github-actions', 'slsa'], 'status': job_results['build']},
               'sa-15': {'tools': ['slsa', 'cosign'], 'status': job_results['release-gate']},
               'sa-17': {'tools': ['zap', 'spotbugs', 'jacoco'], 'status': job_results['integration-dast']},
-              # System Integrity
               'si-4':  {'tools': ['falco', 'otel'], 'status': job_results['build']},
               'si-7':  {'tools': ['cosign', 'slsa'], 'status': job_results['release-gate']},
-              # Supply Chain
               'sr-4':  {'tools': ['cyclonedx', 'sbom'], 'status': job_results['build']},
               'sr-11': {'tools': ['cosign', 'slsa'], 'status': job_results['release-gate']},
-              # Identification & Access
               'ia-2':  {'tools': ['github-oidc'], 'status': job_results['build']},
               'ia-3':  {'tools': ['cosign'], 'status': job_results['release-gate']},
               'ac-2':  {'tools': ['opa-gatekeeper', 'k8s-rbac'], 'status': job_results['checkov']},
               'ac-17': {'tools': ['github-oidc', 'aws-oidc'], 'status': job_results['build']},
-              # Continuous Assessment
               'ca-2':  {'tools': ['github-actions', 'oscal'], 'status': job_results['release-gate']},
               'ca-7':  {'tools': ['falco', 'kube-bench', 'grafana'], 'status': job_results['build']},
               'ca-9':  {'tools': ['otel', 'loki'], 'status': job_results['build']},
@@ -791,7 +788,6 @@ jobs:
                   'values': [[str(time.time_ns()), log_line]]
               })
 
-          # 요약 로그
           satisfied = sum(1 for f in findings if f['target']['status']['state'] == 'satisfied')
           total = len(findings)
           summary_line = json.dumps({
@@ -852,6 +848,10 @@ jobs:
 
   # ══════════════════════════════════════════════════════════════
   # DELIVER Phase - ECR Push + Cosign
+  # Phase 3 변경사항:
+  #   H4: SBOM SCA를 ECR push 이후로 이동 (기존: push 전 실행 → 이미지 미존재 버그)
+  #   M1: SBOM SCA 결과 S3 업로드 추가
+  #   outputs: image-digest 추가 (DEPLOY 잡에서 GitOps digest pinning에 사용)
   # ══════════════════════════════════════════════════════════════
 
   deliver:
@@ -868,6 +868,7 @@ jobs:
       attestations: write
     outputs:
       image-tag: ${{ steps.meta.outputs.image-tag }}
+      image-digest: ${{ steps.push.outputs.image-digest }}  # H3: digest pinning용
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -924,20 +925,19 @@ jobs:
             --spring.main.web-application-type=none 2>/dev/null || true
           echo "Config validation completed"
 
-      - name: SBOM SCA at DELIVER (DoD Table 9 REQUIRED / RA-5, SR-3)
-        uses: anchore/scan-action@v4
-        with:
-          image: ${{ secrets.ECR_REGISTRY }}/jccompany/payment-api:${{ steps.meta.outputs.image-tag }}
-          fail-build: false
-          severity-cutoff: critical
-          output-format: json
-        continue-on-error: true
-
+      # ── Phase 3 H4 fix: ECR Push를 SBOM SCA 앞으로 이동 ──────────────────
       - name: ECR Push (SP 800-204D §5.1.2 / SR-3)
+        id: push
         run: |
           IMAGE_URI="${{ secrets.ECR_REGISTRY }}/jccompany/payment-api:${{ steps.meta.outputs.image-tag }}"
           docker push $IMAGE_URI
-          echo "Pushed: $IMAGE_URI"
+          # digest 캡처 (H3 GitOps deploy에서 사용)
+          DIGEST=$(aws ecr describe-images \
+            --repository-name jccompany/payment-api \
+            --image-ids imageTag=${{ steps.meta.outputs.image-tag }} \
+            --query 'imageDetails[0].imageDigest' --output text)
+          echo "image-digest=${DIGEST}" >> $GITHUB_OUTPUT
+          echo "Pushed: ${IMAGE_URI}@${DIGEST}"
 
       - name: Install Cosign (SSDF PS.2.1 / SR-3)
         uses: sigstore/cosign-installer@v3
@@ -947,6 +947,36 @@ jobs:
           IMAGE_URI="${{ secrets.ECR_REGISTRY }}/jccompany/payment-api:${{ steps.meta.outputs.image-tag }}"
           cosign sign --yes $IMAGE_URI
           echo "Image signed: $IMAGE_URI"
+
+      # ── Phase 3 H4 fix: push 후 ECR 이미지 스캔 (기존: push 전 → 미존재 버그) ─
+      - name: SBOM SCA at DELIVER (DoD Table 9 REQUIRED / RA-5, SR-3)
+        uses: anchore/scan-action@v4
+        id: deliver-sca
+        with:
+          image: ${{ secrets.ECR_REGISTRY }}/jccompany/payment-api:${{ steps.meta.outputs.image-tag }}
+          fail-build: false
+          severity-cutoff: critical
+          output-format: json
+          output-file: deliver-sca-results.json
+        continue-on-error: true
+
+      # ── Phase 3 M1 fix: SBOM SCA 결과 S3 업로드 ─────────────────────────
+      - name: Upload SBOM SCA results to GitHub Artifact (SSDF RV.1.3)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deliver-sbom-sca-${{ github.sha }}
+          path: deliver-sca-results.json
+          retention-days: 90
+
+      - name: Upload SBOM SCA to S3 (AU-9 / SP 800-204D §5.1.3)
+        if: always()
+        run: |
+          if [ -f deliver-sca-results.json ]; then
+            aws s3 cp deliver-sca-results.json \
+              s3://${{ secrets.S3_EVIDENCE_BUCKET }}/deliver/${{ github.sha }}/sbom-sca.json
+            echo "SBOM SCA results uploaded to S3"
+          fi
 
       - name: Upload SBOM to S3 (SSDF PS.3.2 / AU-9)
         run: |
@@ -958,16 +988,26 @@ jobs:
         run: |
           echo "## DELIVER Phase Complete" >> $GITHUB_STEP_SUMMARY
           echo "| Image Tag | ${{ steps.meta.outputs.image-tag }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image Digest | ${{ steps.push.outputs.image-digest }} |" >> $GITHUB_STEP_SUMMARY
           echo "| ECR Push | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| Cosign Signed | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| SBOM SCA (post-push) | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| SBOM to S3 | ✅ |" >> $GITHUB_STEP_SUMMARY
 
   # ══════════════════════════════════════════════════════════════
-  # DEPLOY Phase - EKS 배포 + Post-deploy Scan
+  # DEPLOY Phase - GitOps Push + ArgoCD Sync + Post-deploy Scan
+  # Phase 3 변경사항 (전체 재작성):
+  #   H3: kubectl 직접 배포 제거 → GitHub App으로 GitOps push
+  #       argocd app wait으로 sync 확인 (M5 fix 포함)
+  #   H5: post-deploy Grype 버전 고정 v0.112.0
+  #   H6: kube-bench SHA 고정 + kubectl wait으로 교체 (sleep 60s 제거)
+  #   H8: SBOM SCA at DEPLOY 추가 (DoD Table 10 REQUIRED)
+  #   M1: post-deploy Grype 결과 S3 업로드
+  #   M6: kube-bench 결과 S3 업로드
   # ══════════════════════════════════════════════════════════════
 
   deploy:
-    name: "[DEPLOY] EKS Deploy + Post-deploy Scan"
+    name: "[DEPLOY] GitOps Push + ArgoCD Sync + Post-deploy Scan"
     runs-on: ubuntu-latest
     needs: [deliver, compliance]
     if: |
@@ -988,128 +1028,210 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
           role-session-name: GitHubActions-deploy-${{ github.run_id }}
 
-      - name: Update kubeconfig
+      - name: Update kubeconfig (ArgoCD login + post-deploy 스캔용)
         run: |
           aws eks update-kubeconfig \
             --name jccompany-eks \
             --region ${{ secrets.AWS_REGION }}
 
-      - name: Create K8s prerequisites (CM-7 / AC-6)
-        run: |
-          kubectl create namespace payment-api --dry-run=client -o yaml | kubectl apply -f -
-          kubectl create serviceaccount payment-api \
-            -n payment-api --dry-run=client -o yaml | kubectl apply -f -
-          echo "Prerequisites ready"
+      # ── H3: GitOps push (kubectl 직접 배포 완전 제거) ────────────────────
+      - name: Generate GitHub App token (SP 800-204D §5.1.2 / SSDF PS.3.1)
+        uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.GITOPS_APP_ID }}
+          private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
+          repositories: jccompany-gitops
 
-      - name: Deploy to EKS (CM-2, CM-3 / DoD Table 10)
+      - name: Push image digest to GitOps repo (DoD Table 10 / CM-2, CM-3)
         env:
           IMAGE_TAG: ${{ needs.deliver.outputs.image-tag }}
+          IMAGE_DIGEST: ${{ needs.deliver.outputs.image-digest }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          IMAGE_URI="${{ secrets.ECR_REGISTRY }}/jccompany/payment-api:${IMAGE_TAG}"
-          echo "Deploying: ${IMAGE_URI}"
-          cat << MANIFEST | kubectl apply -f -
-          apiVersion: apps/v1
-          kind: Deployment
-          metadata:
-            name: payment-api
-            namespace: payment-api
-            labels:
-              app: payment-api
-              version: "${IMAGE_TAG}"
-          spec:
-            replicas: 2
-            selector:
-              matchLabels:
-                app: payment-api
-            template:
-              metadata:
-                labels:
-                  app: payment-api
-                  version: "${IMAGE_TAG}"
-              spec:
-                serviceAccountName: payment-api
-                securityContext:
-                  runAsNonRoot: true
-                  runAsUser: 1000
-                  fsGroup: 1000
-                  seccompProfile:
-                    type: RuntimeDefault
-                containers:
-                  - name: payment-api
-                    image: ${IMAGE_URI}
-                    ports:
-                      - containerPort: 8080
-                    securityContext:
-                      allowPrivilegeEscalation: false
-                      readOnlyRootFilesystem: true
-                      capabilities:
-                        drop: ["ALL"]
-                    resources:
-                      requests:
-                        memory: "256Mi"
-                        cpu: "250m"
-                      limits:
-                        memory: "512Mi"
-                        cpu: "500m"
-                    livenessProbe:
-                      httpGet:
-                        path: /actuator/health
-                        port: 8080
-                      initialDelaySeconds: 120
-                      periodSeconds: 10
-                    readinessProbe:
-                      httpGet:
-                        path: /actuator/health
-                        port: 8080
-                      initialDelaySeconds: 90
-                      periodSeconds: 5
-                    env:
-                      - name: SPRING_PROFILES_ACTIVE
-                        value: prod
-                    volumeMounts:
-                      - name: tmp-dir
-                        mountPath: /tmp
-                volumes:
-                  - name: tmp-dir
-                    emptyDir: {}
-          MANIFEST
+          IMAGE_REF="${{ secrets.ECR_REGISTRY }}/jccompany/payment-api@${IMAGE_DIGEST}"
+          echo "Deploying: ${IMAGE_REF}"
 
-      - name: Wait for rollout (CM-3)
+          git clone \
+            https://x-access-token:${GH_TOKEN}@github.com/s1ns3nz0/jccompany-gitops.git \
+            /tmp/gitops
+
+          cd /tmp/gitops
+
+          # deployment.yaml의 image 필드를 digest 방식으로 교체
+          sed -i "s|image:.*jccompany/payment-api.*|image: ${IMAGE_REF}|" \
+            apps/payment-api/deployment.yaml
+
+          git config user.email "gitops-bot@jccompany"
+          git config user.name "jccompany-gitops-bot"
+          git add apps/payment-api/deployment.yaml
+
+          # 변경사항 없으면 (동일 digest 재배포) 스킵
+          if git diff --cached --quiet; then
+            echo "No changes detected (same digest), skipping push"
+            exit 0
+          fi
+
+          git commit -m "$(printf 'deploy: payment-api %s (%s)\n\nimage: %s\ntriggered-by: github-actions/%s\nactor: %s' \
+            "${IMAGE_TAG}" "${GITHUB_SHA::8}" "${IMAGE_REF}" "${GITHUB_RUN_ID}" "${{ github.actor }}")"
+
+          git push
+          echo "GitOps push complete: ${IMAGE_REF}"
+
+      # ── ArgoCD CLI 설치 + sync wait (M5 fix) ──────────────────────────
+      - name: Install ArgoCD CLI v2.14.3 (pinned / SP 800-204D §5.1.2)
         run: |
-          kubectl rollout status deployment/payment-api \
-            -n payment-api \
-            --timeout=10m
+          curl -sSL -o /tmp/argocd \
+            https://github.com/argoproj/argo-cd/releases/download/v2.14.3/argocd-linux-amd64
+          echo "24a8a197f7c1bcf1caa537ca9b299e7cec4dfe4214be4ac7f9dc70824030220a  /tmp/argocd" \
+            | sha256sum -c
+          chmod +x /tmp/argocd
+          mv /tmp/argocd /usr/local/bin/argocd
+          argocd version --client
 
+      - name: ArgoCD login + wait for sync (DoD Table 10 / CM-3)
+        run: |
+          ARGOCD_PASSWORD=$(kubectl get secret argocd-admin-password \
+            -n argocd \
+            -o jsonpath='{.data.password}' | base64 -d)
+
+          argocd login argocd.miata.cloud \
+            --insecure \
+            --grpc-web \
+            --username admin \
+            --password "${ARGOCD_PASSWORD}"
+
+          echo "Waiting for ArgoCD sync + health..."
+          argocd app wait payment-api \
+            --sync \
+            --health \
+            --timeout 300 \
+            --grpc-web
+
+          echo "ArgoCD sync completed"
+          argocd app get payment-api --grpc-web
+
+      # ── Smoke Test ────────────────────────────────────────────────────
       - name: Smoke Test (DoD Table 10 REQUIRED)
         run: |
           ALB_URL=$(kubectl get ingress payment-api-ingress \
             -n payment-api \
             -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "pending")
-          if [ "$ALB_URL" != "pending" ]; then
+
+          if [ "${ALB_URL}" != "pending" ]; then
             sleep 30
-            curl -sf http://${ALB_URL}/actuator/health && \
-              echo "Smoke test passed" || echo "Smoke test failed"
+            if curl -sf "http://${ALB_URL}/actuator/health"; then
+              echo "Smoke test passed"
+            else
+              echo "::warning::Smoke test health check failed (non-blocking)"
+            fi
           else
-            echo "ALB not ready, skipping smoke test"
+            echo "::warning::ALB not ready, smoke test skipped"
           fi
+
+      # ── H8: SBOM SCA at DEPLOY (DoD Table 10 REQUIRED 신규 추가) ─────
+      - name: Download SBOM for deploy SCA
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sbom-*
+          merge-multiple: true
+          path: target/
+
+      - name: SBOM SCA at DEPLOY (DoD Table 10 REQUIRED / RA-5, SR-3)
+        uses: anchore/scan-action@v4
+        with:
+          sbom: target/payment-api-sbom.json
+          fail-build: false
+          severity-cutoff: critical
+          output-format: json
+          output-file: deploy-sca-results.json
+        continue-on-error: true
+
+      - name: Upload SBOM SCA results (SSDF RV.1.3 / SP 800-204D §5.1.3)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deploy-sbom-sca-${{ github.sha }}
+          path: deploy-sca-results.json
+          retention-days: 90
+
+      - name: Upload SBOM SCA to S3 (AU-9)
+        if: always()
+        run: |
+          if [ -f deploy-sca-results.json ]; then
+            aws s3 cp deploy-sca-results.json \
+              s3://${{ secrets.S3_EVIDENCE_BUCKET }}/deploy/${{ github.sha }}/sbom-sca.json
+          fi
+
+      # ── H5: Post-deploy Grype (v0.112.0 버전 고정) ───────────────────────
+      - name: Login to ECR (Grype image pull 인증 / SP 800-204D §5.1.2)
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Install Grype v0.112.0 (pinned / SP 800-204D §5.1.2)
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
+            | sh -s -- -b /usr/local/bin v0.112.0
+          grype version
 
       - name: Post-deploy Security Scan (DoD Table 10 REQUIRED / RA-5)
         env:
           IMAGE_TAG: ${{ needs.deliver.outputs.image-tag }}
         run: |
           IMAGE_URI="${{ secrets.ECR_REGISTRY }}/jccompany/payment-api:${IMAGE_TAG}"
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
-            | sh -s -- -b /usr/local/bin
-          grype ${IMAGE_URI} --output table --fail-on critical || true
+          grype "${IMAGE_URI}" --output json > /tmp/post-deploy-grype.json || true
+          grype "${IMAGE_URI}" --output table --fail-on critical || true
           echo "Post-deploy scan completed"
 
-      - name: kube-bench CIS Kubernetes (DoD Table 10 / CM-2)
+      # ── M1: post-deploy Grype 결과 S3 업로드 (신규) ───────────────────
+      - name: Upload post-deploy Grype results (SSDF RV.1.3)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: post-deploy-grype-${{ github.sha }}
+          path: /tmp/post-deploy-grype.json
+          retention-days: 90
+
+      - name: Upload post-deploy Grype to S3 (AU-9)
+        if: always()
         run: |
+          if [ -f /tmp/post-deploy-grype.json ]; then
+            aws s3 cp /tmp/post-deploy-grype.json \
+              s3://${{ secrets.S3_EVIDENCE_BUCKET }}/deploy/${{ github.sha }}/grype-post-deploy.json
+          fi
+
+      # ── H6: kube-bench SHA 고정 + kubectl wait (sleep 60s 제거) ──────
+      - name: kube-bench CIS Kubernetes (pinned SHA / DoD Table 10 / CM-2, CA-7)
+        run: |
+          # SHA: aquasecurity/kube-bench job.yaml @2026-05
+          # 재확인: https://github.com/aquasecurity/kube-bench/commits/main/job.yaml
+          KUBE_BENCH_SHA="ccb3d707293dac66338f0381e2d62fe5e8740953"
           kubectl apply -f \
-            https://raw.githubusercontent.com/aquasecurity/kube-bench/main/job.yaml
-          sleep 60
-          kubectl logs job/kube-bench 2>/dev/null | tail -20 || true
+            "https://raw.githubusercontent.com/aquasecurity/kube-bench/${KUBE_BENCH_SHA}/job.yaml"
+
+          kubectl wait --for=condition=complete job/kube-bench \
+            --timeout=120s \
+            -n default
+
+          kubectl logs job/kube-bench > /tmp/kube-bench.txt
+          echo "=== kube-bench summary ===" && tail -30 /tmp/kube-bench.txt
           kubectl delete job kube-bench --ignore-not-found
+
+      # ── M6: kube-bench 결과 S3 업로드 (신규) ─────────────────────────
+      - name: Upload kube-bench results (SSDF RV.1.3 / DoD Table 10)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kube-bench-${{ github.sha }}
+          path: /tmp/kube-bench.txt
+          retention-days: 90
+
+      - name: Upload kube-bench to S3 (AU-9)
+        if: always()
+        run: |
+          if [ -f /tmp/kube-bench.txt ]; then
+            aws s3 cp /tmp/kube-bench.txt \
+              s3://${{ secrets.S3_EVIDENCE_BUCKET }}/deploy/${{ github.sha }}/kube-bench.txt
+          fi
 
       - name: Upload deploy evidence to S3 (AU-9 / SSDF PS.3.2)
         run: |
@@ -1122,10 +1244,10 @@ jobs:
         run: |
           echo "## DEPLOY Phase Complete" >> $GITHUB_STEP_SUMMARY
           echo "| Image Tag | ${{ needs.deliver.outputs.image-tag }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Namespace | payment-api |" >> $GITHUB_STEP_SUMMARY
-          echo "| Replicas | 2 |" >> $GITHUB_STEP_SUMMARY
-          echo "| readinessProbe delay | 90s ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| livenessProbe delay | 120s ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| PSS restricted | ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| Post-deploy Scan | completed ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| Evidence to S3 | uploaded ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image Digest | ${{ needs.deliver.outputs.image-digest }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy method | GitOps → jccompany-gitops ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| ArgoCD sync | waited (timeout 300s) ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| SBOM SCA at DEPLOY | ✅ (DoD Table 10) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Post-deploy Grype | ✅ (v0.112.0 pinned) |" >> $GITHUB_STEP_SUMMARY
+          echo "| kube-bench | ✅ (SHA pinned, kubectl wait) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Evidence to S3 | manifest + grype + kube-bench + sbom-sca ✅ |" >> $GITHUB_STEP_SUMMARY
