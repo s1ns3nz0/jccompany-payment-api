@@ -930,12 +930,10 @@ jobs:
         id: push
         run: |
           IMAGE_URI="${{ secrets.ECR_REGISTRY }}/jccompany/payment-api:${{ steps.meta.outputs.image-tag }}"
-          docker push $IMAGE_URI
-          # digest 캡처 (H3 GitOps deploy에서 사용)
-          DIGEST=$(aws ecr describe-images \
-            --repository-name jccompany/payment-api \
-            --image-ids imageTag=${{ steps.meta.outputs.image-tag }} \
-            --query 'imageDetails[0].imageDigest' --output text)
+          PUSH_OUTPUT=$(docker push $IMAGE_URI)
+          echo "$PUSH_OUTPUT"
+          # docker push 출력에서 digest 파싱 (ecr:DescribeImages 권한 불필요)
+          DIGEST=$(echo "$PUSH_OUTPUT" | grep "digest:" | awk '{print $3}')
           echo "image-digest=${DIGEST}" >> $GITHUB_OUTPUT
           echo "Pushed: ${IMAGE_URI}@${DIGEST}"
 
