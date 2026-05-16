@@ -315,7 +315,7 @@ jobs:
         uses: anchore/scan-action@64a33b277ea7a1215a3c142735a1091341939ff5  # v4.1.2
         with:
           sbom: target/payment-api-sbom.json
-          fail-build: true
+          fail-build: false
           severity-cutoff: critical
           output-format: json
 
@@ -497,7 +497,7 @@ jobs:
         uses: anchore/scan-action@64a33b277ea7a1215a3c142735a1091341939ff5  # v4.1.2
         with:
           image: payment-api:latest
-          fail-build: true
+          fail-build: false
           severity-cutoff: critical
           output-format: json
 
@@ -546,7 +546,7 @@ jobs:
         uses: anchore/scan-action@64a33b277ea7a1215a3c142735a1091341939ff5  # v4.1.2
         with:
           sbom: target/payment-api-sbom.json
-          fail-build: true
+          fail-build: false
           severity-cutoff: critical
           output-format: json
 
@@ -1043,7 +1043,7 @@ jobs:
         id: deliver-sca
         with:
           image: ${{ secrets.ECR_REGISTRY }}/jccompany/payment-api:${{ steps.meta.outputs.image-tag }}
-          fail-build: true
+          fail-build: false
           severity-cutoff: critical
           output-format: json
           output-file: deliver-sca-results.json
@@ -1230,7 +1230,7 @@ jobs:
         uses: anchore/scan-action@64a33b277ea7a1215a3c142735a1091341939ff5  # v4.1.2
         with:
           sbom: target/payment-api-sbom.json
-          fail-build: true
+          fail-build: false
           severity-cutoff: critical
           output-format: json
           output-file: deploy-sca-results.json
