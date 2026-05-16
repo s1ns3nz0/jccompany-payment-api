@@ -515,7 +515,9 @@ jobs:
       always() &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
       needs.integration-dast.result == 'success' &&
-      needs.sca-grype-image.result != 'failure'
+      (needs.sca-grype-image.result == 'success' || needs.sca-grype-image.result == 'skipped') &&
+      needs.trivy-cis.result != 'failure' &&
+      needs.sast-spotbugs.result != 'failure'
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -596,7 +598,8 @@ jobs:
     needs: [release-gate]
     if: |
       always() &&
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
+      needs.release-gate.result == 'success'
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -1102,7 +1105,8 @@ jobs:
     if: |
       always() &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
-      needs.deliver.result == 'success'
+      needs.deliver.result == 'success' &&
+      needs.compliance.result == 'success'
     permissions:
       contents: read
       id-token: write
