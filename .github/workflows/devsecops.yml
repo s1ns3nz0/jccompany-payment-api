@@ -795,12 +795,16 @@ jobs:
               state = finding['target']['status']['state']
               family = ctrl.split('-')[0].upper()
               phase = control_phases.get(ctrl, 'OTHER')
-              tools = finding['title'].split(' - ')[1] if ' - ' in finding['title'] else ''
+              tools_raw = finding['title'].split(' - ')[1] if ' - ' in finding['title'] else ''
 
               # 도구별 카운트 집계
-              for tool in eval(tools) if tools.startswith('[') else [tools]:
+              tools_list = eval(tools_raw) if tools_raw.startswith('[') else [tools_raw]
+              for tool in tools_list:
                   if tool.strip():
                       tool_counts[tool.strip()] += 1
+
+              # 깔끔한 포맷: "cyclonedx, sbom" (대시보드 표시용)
+              tools = ', '.join(t.strip() for t in tools_list if t.strip())
 
               # 단계별 카운트 집계
               phase_counts[phase]['total'] += 1
