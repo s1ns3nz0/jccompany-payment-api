@@ -565,8 +565,7 @@ jobs:
           # Semgrep (SARIF/JSON)
           SEMGREP_FILE=$(find scanner-results/ -name "*.sarif" -path "*semgrep*" 2>/dev/null | head -1)
           [ -n "$SEMGREP_FILE" ] && safe_wrap_json semgrep sarif "$SEMGREP_FILE" risk-input/semgrep.json
-          # SpotBugs (XML → base64)
-          safe_wrap_base64 spotbugs xml scanner-results/spotbugs-report/spotbugsXml.xml risk-input/spotbugs.json
+          # SpotBugs (XML) — skipped: Risk Platform requires JSON content
           # Grype SBOM SCA (JSON)
           safe_wrap_json grype json scanner-results/grype-sbom-results/results.json risk-input/grype-sbom.json
           # Hadolint (SARIF)
@@ -575,6 +574,13 @@ jobs:
           safe_wrap_json checkov json scanner-results/checkov-results/checkov-k8s-results.json risk-input/checkov.json
           # Gitleaks (SARIF)
           safe_wrap_json gitleaks sarif scanner-results/gitleaks-results/results.sarif risk-input/gitleaks.json
+          # Remove files with null content
+          for f in risk-input/*.json; do
+            if jq -e '.content == null' "$f" > /dev/null 2>&1; then
+              echo "Removing ${f} (null content)"
+              rm "$f"
+            fi
+          done
           # Combine all (H3 fix: jq for safe JSON assembly)
           COUNT=$(ls risk-input/*.json 2>/dev/null | wc -l)
           if [ "$COUNT" -gt 0 ]; then
@@ -589,13 +595,24 @@ jobs:
           RISK_API_KEY: ${{ secrets.RISK_PLATFORM_API_KEY }}
           RISK_URL: ${{ secrets.RISK_PLATFORM_URL }}
         run: |
-          HTTP_CODE=$(curl -s -o risk-build-result.json -w "%{http_code}" \
+          # Bedrock mode requires async_mode
+          PAYLOAD=$(jq '. + {"async_mode": true}' risk-input/combined.json)
+          HTTP_CODE=$(curl -s -o risk-build-response.json -w "%{http_code}" \
             -X POST "${RISK_URL}/v1/products/payment-api/assess" \
             -H "X-API-Key: ${RISK_API_KEY}" \
             -H "Content-Type: application/json" \
-            -d @risk-input/combined.json)
+            -d "$PAYLOAD")
           echo "Risk Platform response: HTTP ${HTTP_CODE}"
-          if [ "$HTTP_CODE" = "200" ]; then
+          if [ "$HTTP_CODE" = "202" ]; then
+            JOB_ID=$(jq -r '.job_id' risk-build-response.json)
+            echo "Job submitted: ${JOB_ID} — polling (max 3min)..."
+            for i in $(seq 1 18); do
+              sleep 10
+              STATUS=$(curl -s -H "X-API-Key: ${RISK_API_KEY}" "${RISK_URL}/v1/jobs/${JOB_ID}" | jq -r '.status // empty')
+              echo "  Poll ${i}/18: status=${STATUS}"
+              [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ] && break
+            done
+            curl -s -H "X-API-Key: ${RISK_API_KEY}" "${RISK_URL}/v1/jobs/${JOB_ID}" | jq '.result // .' > risk-build-result.json
             python3 -c "
           import json
           with open('risk-build-result.json') as f:
@@ -603,8 +620,12 @@ jobs:
           print(f'BUILD Risk Level: {r.get(\"risk_level\", \"unknown\")}')
           print(f'Findings: {r.get(\"total_findings\", 0)}')
           " 2>/dev/null || echo "Response parsing skipped"
+          elif [ "$HTTP_CODE" = "200" ]; then
+            cp risk-build-response.json risk-build-result.json
+            echo "Static mode response"
           else
             echo "::warning::Risk Platform returned HTTP ${HTTP_CODE} — assessment skipped"
+            echo '{}' > risk-build-result.json
           fi
 
       - name: Upload BUILD risk assessment
@@ -646,6 +667,13 @@ jobs:
           safe_wrap_json grype-image json scanner-results/grype-image-results/results.json risk-input/grype-image.json
           # Trivy CIS (JSON)
           safe_wrap_json trivy json scanner-results/trivy-cis-results/trivy-cis-results.json risk-input/trivy.json
+          # Remove files with null content
+          for f in risk-input/*.json; do
+            if jq -e '.content == null' "$f" > /dev/null 2>&1; then
+              echo "Removing ${f} (null content)"
+              rm "$f"
+            fi
+          done
           # Combine (H3 fix: jq for safe JSON assembly)
           COUNT=$(ls risk-input/*.json 2>/dev/null | wc -l)
           if [ "$COUNT" -gt 0 ]; then
@@ -660,13 +688,23 @@ jobs:
           RISK_API_KEY: ${{ secrets.RISK_PLATFORM_API_KEY }}
           RISK_URL: ${{ secrets.RISK_PLATFORM_URL }}
         run: |
-          HTTP_CODE=$(curl -s -o risk-test-result.json -w "%{http_code}" \
+          PAYLOAD=$(jq '. + {"async_mode": true}' risk-input/combined.json)
+          HTTP_CODE=$(curl -s -o risk-test-response.json -w "%{http_code}" \
             -X POST "${RISK_URL}/v1/products/payment-api/assess" \
             -H "X-API-Key: ${RISK_API_KEY}" \
             -H "Content-Type: application/json" \
-            -d @risk-input/combined.json)
+            -d "$PAYLOAD")
           echo "Risk Platform response: HTTP ${HTTP_CODE}"
-          if [ "$HTTP_CODE" = "200" ]; then
+          if [ "$HTTP_CODE" = "202" ]; then
+            JOB_ID=$(jq -r '.job_id' risk-test-response.json)
+            echo "Job submitted: ${JOB_ID} — polling (max 3min)..."
+            for i in $(seq 1 18); do
+              sleep 10
+              STATUS=$(curl -s -H "X-API-Key: ${RISK_API_KEY}" "${RISK_URL}/v1/jobs/${JOB_ID}" | jq -r '.status // empty')
+              echo "  Poll ${i}/18: status=${STATUS}"
+              [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ] && break
+            done
+            curl -s -H "X-API-Key: ${RISK_API_KEY}" "${RISK_URL}/v1/jobs/${JOB_ID}" | jq '.result // .' > risk-test-result.json
             python3 -c "
           import json
           with open('risk-test-result.json') as f:
@@ -674,8 +712,12 @@ jobs:
           print(f'TEST Risk Level: {r.get(\"risk_level\", \"unknown\")}')
           print(f'Findings: {r.get(\"total_findings\", 0)}')
           " 2>/dev/null || echo "Response parsing skipped"
+          elif [ "$HTTP_CODE" = "200" ]; then
+            cp risk-test-response.json risk-test-result.json
+            echo "Static mode response"
           else
             echo "::warning::Risk Platform returned HTTP ${HTTP_CODE} — assessment skipped"
+            echo '{}' > risk-test-result.json
           fi
 
       - name: Upload TEST risk assessment
@@ -746,11 +788,18 @@ jobs:
           safe_wrap_json hadolint sarif scanner-results/hadolint-results/hadolint-results.sarif risk-input/hadolint.json
           safe_wrap_json grype json scanner-results/grype-sbom-results/results.json risk-input/grype.json
           safe_wrap_json checkov json scanner-results/checkov-results/checkov-k8s-results.json risk-input/checkov.json
-          safe_wrap_base64 spotbugs xml scanner-results/spotbugs-report/spotbugsXml.xml risk-input/spotbugs.json
+          # SpotBugs (XML) — skipped: Risk Platform requires JSON content
           # TEST scanners
           safe_wrap_json zap json scanner-results/zap-report/report_json.json risk-input/zap.json
           safe_wrap_json grype-image json scanner-results/grype-image-results/results.json risk-input/grype-image.json
           safe_wrap_json trivy json scanner-results/trivy-cis-results/trivy-cis-results.json risk-input/trivy.json
+          # Remove files with null content before combining
+          for f in risk-input/*.json; do
+            if jq -e '.content == null' "$f" > /dev/null 2>&1; then
+              echo "Removing ${f} (null content)"
+              rm "$f"
+            fi
+          done
           # Combine ALL (H3 fix: jq for safe JSON assembly)
           COUNT=$(ls risk-input/*.json 2>/dev/null | wc -l)
           if [ "$COUNT" -gt 0 ]; then
@@ -836,7 +885,7 @@ jobs:
               sys.exit(1)
           decision = auth.get('decision', '')
           if decision not in ('ATO', 'DATO'):
-              print(f'::error::Unknown authorization decision: {decision}')
+              print(f'::error::Unknown authorization decision: {decision} — treating as DATO')
               sys.exit(1)
           risk = r.get('risk_level', 'unknown')
           findings = r.get('total_findings', 0)
