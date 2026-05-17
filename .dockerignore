@@ -1,0 +1,11 @@
+.git/
+.github/
+target/
+*.md
+docs/
+.zap/
+k8s/
+controls/
+packer/
+.idea/
+*.iml
