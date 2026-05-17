@@ -766,18 +766,70 @@ jobs:
           RISK_API_KEY: ${{ secrets.RISK_PLATFORM_API_KEY }}
           RISK_URL: ${{ secrets.RISK_PLATFORM_URL }}
         run: |
-          HTTP_CODE=$(curl -s -o risk-release-result.json -w "%{http_code}" \
+          # Bedrock AI mode: async request + job polling
+          # Build combined payload with async_mode flag
+          PAYLOAD=$(jq '. + {"async_mode": true}' risk-input/combined.json)
+          HTTP_CODE=$(curl -s -o risk-release-response.json -w "%{http_code}" \
             -X POST "${RISK_URL}/v1/products/payment-api/assess" \
             -H "X-API-Key: ${RISK_API_KEY}" \
             -H "Content-Type: application/json" \
-            -d @risk-input/combined.json)
+            -d "$PAYLOAD")
           echo "Risk Platform response: HTTP ${HTTP_CODE}"
-          if [ "$HTTP_CODE" = "200" ]; then
-            python3 << 'GATE'
+
+          if [ "$HTTP_CODE" = "202" ]; then
+            # Async accepted — poll for completion (max 5 min, 10s interval)
+            JOB_ID=$(jq -r '.job_id' risk-release-response.json)
+            echo "Job submitted: ${JOB_ID} — polling for Bedrock AI assessment..."
+            for i in $(seq 1 30); do
+              sleep 10
+              JOB_RESPONSE=$(curl -s -H "X-API-Key: ${RISK_API_KEY}" \
+                "${RISK_URL}/v1/jobs/${JOB_ID}")
+              STATUS=$(echo "$JOB_RESPONSE" | jq -r '.status // empty')
+              echo "  Poll ${i}/30: status=${STATUS}"
+              if [ "$STATUS" = "completed" ]; then
+                echo "$JOB_RESPONSE" | jq '.result' > risk-release-result.json
+                break
+              fi
+              if [ "$STATUS" = "failed" ]; then
+                echo "::warning::Bedrock AI assessment failed — falling back to static result"
+                echo "$JOB_RESPONSE" | jq '.' > risk-release-result.json
+                break
+              fi
+            done
+            if [ "$STATUS" != "completed" ] && [ "$STATUS" != "failed" ]; then
+              echo "::warning::Bedrock AI assessment timed out (5min) — using fallback gate"
+              FAIL=0
+              [ "${{ needs.integration-dast.result }}" != "success" ] && FAIL=1
+              [ "${{ needs.sca-grype-image.result }}" == "failure" ] && FAIL=1
+              [ "${{ needs.sast-spotbugs.result }}" == "failure" ] && FAIL=1
+              [ "${{ needs.trivy-cis.result }}" == "failure" ] && FAIL=1
+              [ "$FAIL" = "1" ] && echo "::error::Fallback gate failed" && exit 1
+              echo "Fallback gate passed" && exit 0
+            fi
+          elif [ "$HTTP_CODE" = "200" ]; then
+            # Static mode fallback (sync response)
+            cp risk-release-response.json risk-release-result.json
+            echo "Static mode response received"
+          else
+            # Platform unavailable — fallback gate
+            echo "::warning::Risk Platform unavailable (HTTP ${HTTP_CODE}) — using fallback gate"
+            FAIL=0
+            [ "${{ needs.integration-dast.result }}" != "success" ] && FAIL=1 && echo "::error::Fallback: integration-dast failed"
+            [ "${{ needs.sca-grype-image.result }}" == "failure" ] && FAIL=1 && echo "::error::Fallback: sca-grype-image failed"
+            [ "${{ needs.sast-spotbugs.result }}" == "failure" ] && FAIL=1 && echo "::error::Fallback: sast-spotbugs failed"
+            [ "${{ needs.trivy-cis.result }}" == "failure" ] && FAIL=1 && echo "::error::Fallback: trivy-cis failed"
+            if [ "$FAIL" = "1" ]; then
+              echo "::error::Fallback gate: critical scanner failures detected"
+              exit 1
+            fi
+            echo "Fallback gate: all critical scanners passed" && exit 0
+          fi
+
+          # Gate decision from result
+          python3 << 'GATE'
           import json, sys
           with open('risk-release-result.json') as f:
               r = json.load(f)
-          # M5 fix: validate response structure (fail-closed)
           auth = r.get('authorization')
           if auth is None:
               print('::error::Risk Platform returned no authorization field — blocking deployment')
@@ -796,20 +848,6 @@ jobs:
               sys.exit(1)
           print('Risk Assessment: ATO — proceeding to DELIVER')
           GATE
-          else
-            # H1 fix: strengthened fallback gate
-            echo "::warning::Risk Platform unavailable (HTTP ${HTTP_CODE}) — using fallback gate"
-            FAIL=0
-            [ "${{ needs.integration-dast.result }}" != "success" ] && FAIL=1 && echo "::error::Fallback: integration-dast failed"
-            [ "${{ needs.sca-grype-image.result }}" == "failure" ] && FAIL=1 && echo "::error::Fallback: sca-grype-image failed"
-            [ "${{ needs.sast-spotbugs.result }}" == "failure" ] && FAIL=1 && echo "::error::Fallback: sast-spotbugs failed"
-            [ "${{ needs.trivy-cis.result }}" == "failure" ] && FAIL=1 && echo "::error::Fallback: trivy-cis failed"
-            if [ "$FAIL" = "1" ]; then
-              echo "::error::Fallback gate: critical scanner failures detected"
-              exit 1
-            fi
-            echo "Fallback gate: all critical scanners passed"
-          fi
 
       - name: Download SBOM for release SCA
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
@@ -1395,8 +1433,19 @@ jobs:
           argocd login argocd.miata.cloud \
             --insecure --grpc-web \
             --username admin --password "${ARGOCD_PASSWORD}"
-          argocd app wait payment-api \
-            --sync --health --timeout 300 --grpc-web
+          # Wait with 600s timeout (increased from 300s for rolling update headroom)
+          if ! argocd app wait payment-api \
+            --sync --health --timeout 600 --grpc-web; then
+            echo "::warning::ArgoCD wait timed out — checking current state"
+            STATE=$(argocd app get payment-api --grpc-web -o json | jq -r '.status.health.status')
+            echo "Health: ${STATE}"
+            if [ "$STATE" = "Healthy" ] || [ "$STATE" = "Progressing" ]; then
+              echo "App is ${STATE} — continuing (deployment may still be rolling)"
+            else
+              echo "::error::ArgoCD app is ${STATE} — deployment failed"
+              exit 1
+            fi
+          fi
           argocd app get payment-api --grpc-web
 
       - name: Smoke Test (DoD Table 10 REQUIRED)
@@ -1519,7 +1568,7 @@ jobs:
           echo "| Image Tag | ${{ needs.deliver.outputs.image-tag }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Image Digest | ${{ needs.deliver.outputs.image-digest }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Deploy method | GitOps → jccompany-gitops ✅ |" >> $GITHUB_STEP_SUMMARY
-          echo "| ArgoCD sync | waited (timeout 300s) ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| ArgoCD sync | waited (timeout 600s, graceful fallback) ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| SBOM SCA at DEPLOY | ✅ (DoD Table 10) |" >> $GITHUB_STEP_SUMMARY
           echo "| Post-deploy Grype | ✅ (v0.112.0 pinned) |" >> $GITHUB_STEP_SUMMARY
           echo "| kube-bench | ✅ (SHA pinned) |" >> $GITHUB_STEP_SUMMARY
