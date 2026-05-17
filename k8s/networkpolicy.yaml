@@ -1,3 +1,7 @@
+# ══════════════════════════════════════════════════════════════
+# NetworkPolicy — payment-api (Least Privilege Network Access)
+# CIS K8s 5.3.2 / NSA/CISA §3.1 / NIST AC-4, SC-7
+# ══════════════════════════════════════════════════════════════
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -10,13 +14,33 @@ spec:
   policyTypes:
     - Ingress
     - Egress
+
   ingress:
-    - from:
+    # ALB → payment-api (외부 HTTP 트래픽)
+    # ALB는 클러스터 외부이므로 namespaceSelector 없이 허용
+    - ports:
+        - protocol: TCP
+          port: 8080
+
+  egress:
+    # DNS (kube-dns in kube-system)
+    - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system
       ports:
+        - protocol: UDP
+          port: 53
         - protocol: TCP
-          port: 8080
-  egress:
-    - {}
+          port: 53
+
+    # OTel → Loki (monitoring namespace)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 3100
