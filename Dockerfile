@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y maven && rm -rf /var/lib/apt/lists/*
 COPY pom.xml .
 RUN mvn dependency:go-offline -q
 COPY src ./src
-RUN mvn package -DskipTests -q -o
+RUN mvn package -DskipTests -q
 
 # ── Stage 2: OTel Agent (SHA-verified / SP 800-204D §5.1.1) ─
 FROM eclipse-temurin:17-jdk-jammy AS otel-agent
