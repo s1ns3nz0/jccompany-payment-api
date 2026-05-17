@@ -168,6 +168,22 @@ jobs:
             target/payment-api-sbom.xml
           retention-days: 90
 
+      - name: Upload SBOM to Dependency-Track (RA-5, SR-3 / SSDF RV.1.1)
+        if: success()
+        env:
+          DT_URL: ${{ secrets.DT_URL }}
+          DT_API_KEY: ${{ secrets.DT_API_KEY }}
+        run: |
+          curl -sf -X POST "${DT_URL}/api/v1/bom" \
+            -H "X-Api-Key: ${DT_API_KEY}" \
+            -H "Content-Type: multipart/form-data" \
+            -F "autoCreate=true" \
+            -F "projectName=payment-api" \
+            -F "projectVersion=latest" \
+            -F "bom=@target/payment-api-sbom.json;type=application/json" \
+            -o /dev/null -w "DT upload: HTTP %{http_code}\n" \
+            || echo "::warning::Dependency-Track upload failed - CVE monitoring gap"
+
   # ══════════════════════════════════════════════════════════════
   # BUILD Phase - Job 2: Hadolint
   # ══════════════════════════════════════════════════════════════
