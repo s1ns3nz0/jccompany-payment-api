@@ -1567,7 +1567,7 @@ jobs:
           role-session-name: GitHubActions-deliver-${{ github.run_id }}
 
       - name: Login to ECR
-        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076  # v2.0.1
+        uses: aws-actions/amazon-ecr-login@fa648b43de3d4d023bcb3f89ed6940096949c419  # v2.1.5
 
       - name: Download Docker image from BUILD
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
@@ -1874,7 +1874,7 @@ jobs:
           fi
 
       - name: Login to ECR (Grype image pull)
-        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076  # v2.0.1
+        uses: aws-actions/amazon-ecr-login@fa648b43de3d4d023bcb3f89ed6940096949c419  # v2.1.5
 
       - name: Install Grype v0.112.0 (SHA-hardcoded / SP 800-204D S5.1.2)
         run: |
