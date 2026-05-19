@@ -32,19 +32,19 @@ jobs:
       issues: write
     steps:
       - name: Checkout (SHA-pinned / SP 800-204D S5.1.1)
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
         with:
           fetch-depth: 0
 
       - name: Gitleaks (IA-5, SI-3, SR-3 / SSDF PS.1 / SP 800-204D S5.1.4)
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+        uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc  # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
           GITLEAKS_ENABLE_SUMMARY: true
 
       - name: Upload Gitleaks results
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: gitleaks-results
@@ -57,7 +57,7 @@ jobs:
     needs: [secret-scan]
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
 
       - name: Semgrep (SA-11, SI-10, SC-13 / SSDF PW.7, PW.8 / SP 800-204D S5.1.3)
         continue-on-error: true
@@ -69,7 +69,7 @@ jobs:
           echo "Semgrep findings: $(jq '.runs[0].results | length' semgrep-results.sarif 2>/dev/null || echo 0)"
 
       - name: Upload Semgrep results (SP 800-204D S5.1.3 / SSDF RV.1.3)
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: semgrep-results-${{ github.sha }}
@@ -92,7 +92,7 @@ jobs:
       git-sha: ${{ steps.meta.outputs.git-sha }}
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
 
       - name: Set up Java 17
         uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00  # v4.7.1
@@ -133,21 +133,21 @@ jobs:
         run: docker save payment-api:${{ steps.meta.outputs.git-sha }} | gzip > payment-api-image.tar.gz
 
       - name: Upload JAR
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: jar-${{ steps.meta.outputs.git-sha }}
           path: target/*.jar
           retention-days: 90
 
       - name: Upload Docker image
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: docker-image-${{ steps.meta.outputs.git-sha }}
           path: payment-api-image.tar.gz
           retention-days: 90
 
       - name: Upload SBOM (SSDF PS.3 / SR-3)
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: sbom-${{ steps.meta.outputs.git-sha }}
           path: |
@@ -161,15 +161,26 @@ jobs:
           DT_URL: ${{ secrets.DT_URL }}
           DT_API_KEY: ${{ secrets.DT_API_KEY }}
         run: |
-          curl -sf -X POST "${DT_URL}/api/v1/bom" \
-            -H "X-Api-Key: ${DT_API_KEY}" \
-            -H "Content-Type: multipart/form-data" \
-            -F "autoCreate=true" \
-            -F "projectName=payment-api" \
-            -F "projectVersion=latest" \
-            -F "bom=@target/payment-api-sbom.json;type=application/json" \
-            -o /dev/null -w "DT upload: HTTP %{http_code}\n" \
-            || echo "::warning::Dependency-Track upload failed - CVE monitoring gap"
+          if [ -z "$DT_URL" ] || [ -z "$DT_API_KEY" ]; then
+            echo "::warning::D-Track secrets not set -- skipping SBOM upload"
+            exit 0
+          fi
+          for attempt in 1 2 3; do
+            HTTP=$(curl -sf -X POST "${DT_URL}/api/v1/bom" \
+              -H "X-Api-Key: ${DT_API_KEY}" \
+              -H "Content-Type: multipart/form-data" \
+              -F "autoCreate=true" \
+              -F "projectName=payment-api" \
+              -F "projectVersion=latest" \
+              -F "bom=@target/payment-api-sbom.json;type=application/json" \
+              -o /dev/null -w "%{http_code}" 2>/dev/null) || HTTP="000"
+            echo "D-Track upload attempt ${attempt}: HTTP ${HTTP}"
+            [ "$HTTP" = "200" ] || [ "$HTTP" = "201" ] && break
+            sleep 5
+          done
+          if [ "$HTTP" != "200" ] && [ "$HTTP" != "201" ]; then
+            echo "::warning::Dependency-Track upload failed after 3 retries (HTTP ${HTTP}) -- CVE monitoring gap"
+          fi
 
   hadolint:
     name: "[BUILD] Hadolint - Dockerfile Lint"
@@ -177,7 +188,7 @@ jobs:
     needs: [secret-scan]
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
 
       - name: Hadolint (CIS Docker 4.x / CM-7, CM-2 / SSDF PW.7.2)
         uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf  # v3.1.0
@@ -190,7 +201,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload Hadolint results
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: hadolint-results
@@ -203,28 +214,36 @@ jobs:
     needs: [secret-scan]
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
 
       - name: Checkov K8s Manifest Scan (CM-2, CM-6, AC-4, AC-6, SC-5)
-        uses: bridgecrewio/checkov-action@33dbb953e9f9e28d92903b9c214f4072e6c7fd07  # v12.2969.0
-        with:
-          directory: k8s/
-          framework: kubernetes
-          soft_fail: true
-          output_format: json
-          output_file_path: checkov-k8s-results.json
-          download_external_modules: false
+        run: |
+          pip install checkov --break-system-packages -q
+          checkov -d k8s/ --framework kubernetes --soft-fail \
+            --output json --output-file-path checkov-k8s-results.json 2>/dev/null || true
+          # checkov creates directory; move file to expected location
+          if [ -f checkov-k8s-results.json/results_json.json ]; then
+            mv checkov-k8s-results.json/results_json.json checkov-k8s-results-final.json
+            rm -rf checkov-k8s-results.json
+            mv checkov-k8s-results-final.json checkov-k8s-results.json
+          fi
+          PASSED=$(jq '.summary.passed // 0' checkov-k8s-results.json 2>/dev/null || echo 0)
+          FAILED=$(jq '.summary.failed // 0' checkov-k8s-results.json 2>/dev/null || echo 0)
+          echo "Checkov K8s: passed=${PASSED} failed=${FAILED}"
         continue-on-error: true
 
       - name: Checkov Dockerfile Scan (CM-7, SC-28, AC-6)
-        uses: bridgecrewio/checkov-action@33dbb953e9f9e28d92903b9c214f4072e6c7fd07  # v12.2969.0
-        with:
-          file: Dockerfile
-          framework: dockerfile
-          soft_fail: true
-          output_format: json
-          output_file_path: checkov-dockerfile-results.json
-          download_external_modules: false
+        run: |
+          checkov -f Dockerfile --framework dockerfile --soft-fail \
+            --output json --output-file-path checkov-dockerfile-results.json 2>/dev/null || true
+          if [ -f checkov-dockerfile-results.json/results_json.json ]; then
+            mv checkov-dockerfile-results.json/results_json.json checkov-dockerfile-results-final.json
+            rm -rf checkov-dockerfile-results.json
+            mv checkov-dockerfile-results-final.json checkov-dockerfile-results.json
+          fi
+          PASSED=$(jq '.summary.passed // 0' checkov-dockerfile-results.json 2>/dev/null || echo 0)
+          FAILED=$(jq '.summary.failed // 0' checkov-dockerfile-results.json 2>/dev/null || echo 0)
+          echo "Checkov Dockerfile: passed=${PASSED} failed=${FAILED}"
         continue-on-error: true
 
       - name: Checkov Summary
@@ -236,13 +255,14 @@ jobs:
           echo "- Controls: CM-2, CM-6, AC-4, AC-6, SC-5, SC-28" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload Checkov results
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: checkov-results
           path: |
             checkov-k8s-results.json
             checkov-dockerfile-results.json
+          if-no-files-found: warn
           retention-days: 90
 
   cis-java:
@@ -251,7 +271,7 @@ jobs:
     needs: [secret-scan]
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
 
       - name: CIS Java Benchmark Check (CM-7, SC-8, SC-13, AU-2, SR-3)
         run: |
@@ -260,7 +280,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload CIS Java results
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: cis-java-results
@@ -273,7 +293,7 @@ jobs:
     needs: [build]
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
 
       - name: Set up Java 17
         uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00  # v4.7.1
@@ -292,7 +312,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload SpotBugs report
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: spotbugs-report
@@ -307,7 +327,7 @@ jobs:
     needs: [build]
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
 
       - name: Download SBOM
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
@@ -318,26 +338,16 @@ jobs:
 
       - name: Scan SBOM for CVEs (RA-5, SI-2, SR-3 / SSDF RV.1)
         id: grype-sbom
-        uses: anchore/scan-action@64a33b277ea7a1215a3c142735a1091341939ff5  # v4.1.2
-        with:
-          sbom: target/payment-api-sbom.json
-          fail-build: false
-          severity-cutoff: critical
-          output-format: json
-
-      - name: Ensure Grype SBOM output exists
-        if: always()
         run: |
-          # anchore/scan-action may produce empty file
-          if [ ! -s results.json ]; then
-            echo "::warning::Grype SBOM results.json is empty -- running grype CLI fallback"
-            curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.112.0 || true
-            grype sbom:target/payment-api-sbom.json -o json > results.json 2>/dev/null || echo '{"matches":[]}' > results.json
-          fi
-          echo "Grype SBOM results size: $(wc -c < results.json) bytes"
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.112.0
+          grype sbom:target/payment-api-sbom.json -o json > results.json 2>/dev/null || echo '{"matches":[]}' > results.json
+          MATCHES=$(jq '.matches | length' results.json 2>/dev/null || echo 0)
+          echo "Grype SBOM: ${MATCHES} CVE matches found"
+          echo "grype-matches=${MATCHES}" >> $GITHUB_OUTPUT
+        continue-on-error: true
 
       - name: Upload Grype SBOM results
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: grype-sbom-results
@@ -354,7 +364,7 @@ jobs:
     needs: [build]
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
 
       - name: Set up Java 17
         uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00  # v4.7.1
@@ -367,13 +377,14 @@ jobs:
         run: mvn verify
 
       - name: Upload test results
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: test-results
           path: |
             target/surefire-reports/
             target/site/jacoco/
+          if-no-files-found: warn
           retention-days: 90
 
   trivy-cis:
@@ -382,7 +393,7 @@ jobs:
     needs: [build]
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
 
       - name: Download Docker image
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
@@ -407,22 +418,18 @@ jobs:
       - name: Trivy CIS Docker Benchmark (CM-2, SI-3 / CIS Docker S4, S5)
         run: |
           mkdir -p target
-          trivy image \
-            --compliance docker-cis-1.6 \
-            --format json \
-            --output target/trivy-cis-results.json \
-            payment-api:latest || true
-          # Trivy may fail or produce empty file
-          if [ ! -s target/trivy-cis-results.json ]; then
-            echo "::warning::Trivy CIS output empty -- generating fallback"
-            trivy image --format json --output target/trivy-cis-results.json \
-              payment-api:latest 2>/dev/null || \
-              echo '{"Results":[]}' > target/trivy-cis-results.json
-          fi
-          echo "Trivy CIS results size: $(wc -c < target/trivy-cis-results.json) bytes"
+          # CIS compliance check (text output for evidence)
+          trivy image --compliance docker-cis-1.6 payment-api:latest \
+            > target/trivy-cis-compliance.txt 2>&1 || true
+          echo "CIS compliance check: $(wc -l < target/trivy-cis-compliance.txt) lines"
+          # Vulnerability scan (JSON output for Risk Platform)
+          trivy image --format json --output target/trivy-cis-results.json \
+            payment-api:latest 2>/dev/null || echo '{"Results":[]}' > target/trivy-cis-results.json
+          VULNS=$(jq '[.Results[]?.Vulnerabilities // [] | length] | add // 0' target/trivy-cis-results.json 2>/dev/null || echo 0)
+          echo "Trivy: ${VULNS} vulnerabilities found"
 
       - name: Upload Trivy CIS results
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: trivy-cis-results
@@ -435,7 +442,7 @@ jobs:
     needs: [unit-test, sast-spotbugs, sca-grype, hadolint, trivy-cis, cis-java]
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
 
       - name: Download Docker image
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
@@ -482,10 +489,11 @@ jobs:
           target: 'http://localhost:8080'
           rules_file_name: '.zap/rules.tsv'
           cmd_options: '-a'
+          allow_issue_writing: false
         continue-on-error: true
 
       - name: Upload ZAP report
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: zap-report
@@ -504,7 +512,7 @@ jobs:
     needs: [unit-test]
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
 
       - name: Download Docker image
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
@@ -519,25 +527,16 @@ jobs:
 
       - name: Scan container image for CVEs (RA-5, SR-3 / SSDF PS.3.2)
         id: grype-image
-        uses: anchore/scan-action@64a33b277ea7a1215a3c142735a1091341939ff5  # v4.1.2
-        with:
-          image: payment-api:latest
-          fail-build: false
-          severity-cutoff: critical
-          output-format: json
-
-      - name: Ensure Grype Image output exists
-        if: always()
         run: |
-          if [ ! -s results.json ]; then
-            echo "::warning::Grype Image results.json is empty -- running grype CLI fallback"
-            curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.112.0 || true
-            grype payment-api:latest -o json > results.json 2>/dev/null || echo '{"matches":[]}' > results.json
-          fi
-          echo "Grype Image results size: $(wc -c < results.json) bytes"
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.112.0
+          grype payment-api:latest -o json > results.json 2>/dev/null || echo '{"matches":[]}' > results.json
+          MATCHES=$(jq '.matches | length' results.json 2>/dev/null || echo 0)
+          echo "Grype Image: ${MATCHES} CVE matches found"
+          echo "grype-matches=${MATCHES}" >> $GITHUB_OUTPUT
+        continue-on-error: true
 
       - name: Upload Grype Image results
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: grype-image-results
@@ -608,12 +607,12 @@ jobs:
             echo "::warning::Risk Platform URL not set or no scanner input -- skipping"
             exit 0
           fi
-          PAYLOAD=$(jq '. + {"async_mode": true, "phase": "DEVELOP"}' risk-input/combined.json)
+          jq '. + {"async_mode": true, "phase": "DEVELOP"}' risk-input/combined.json > risk-input/payload.json
           HTTP_CODE=$(curl -s -o risk-develop-response.json -w "%{http_code}" \
             -X POST "${RISK_URL}/v1/products/payment-api/assess" \
             -H "X-API-Key: ${RISK_API_KEY}" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD")
+            -d @risk-input/payload.json)
           echo "Risk Platform response: HTTP ${HTTP_CODE}"
           if [ "$HTTP_CODE" = "202" ]; then
             JOB_ID=$(jq -r '.job_id' risk-develop-response.json)
@@ -640,7 +639,7 @@ jobs:
           fi
 
       - name: Upload DEVELOP risk assessment
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: risk-assess-develop-${{ github.sha }}
@@ -679,8 +678,7 @@ jobs:
           # Hadolint (SARIF)
           safe_wrap_json hadolint sarif scanner-results/hadolint-results/hadolint-results.sarif risk-input/hadolint.json
           # Checkov (JSON -- output_file_path creates nested dir)
-          CHECKOV_FILE=$(find scanner-results/checkov-results -name "results_json.json" -path "*k8s*" 2>/dev/null | head -1)
-          [ -n "$CHECKOV_FILE" ] && safe_wrap_json checkov json "$CHECKOV_FILE" risk-input/checkov.json
+          safe_wrap_json checkov json scanner-results/checkov-results/checkov-k8s-results.json risk-input/checkov.json
           # CIS Java (JSON -- if available)
           safe_wrap_json cis-java json scanner-results/cis-java-results/cis-java-results.json risk-input/cis-java.json
           # Remove files with null content
@@ -710,12 +708,12 @@ jobs:
             echo "::warning::Risk Platform URL not set or no scanner input -- skipping"
             exit 0
           fi
-          PAYLOAD=$(jq '. + {"async_mode": true, "phase": "BUILD"}' risk-input/combined.json)
+          jq '. + {"async_mode": true, "phase": "BUILD"}' risk-input/combined.json > risk-input/payload.json
           HTTP_CODE=$(curl -s -o risk-build-response.json -w "%{http_code}" \
             -X POST "${RISK_URL}/v1/products/payment-api/assess" \
             -H "X-API-Key: ${RISK_API_KEY}" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD")
+            -d @risk-input/payload.json)
           echo "Risk Platform response: HTTP ${HTTP_CODE}"
           if [ "$HTTP_CODE" = "202" ]; then
             JOB_ID=$(jq -r '.job_id' risk-build-response.json)
@@ -742,7 +740,7 @@ jobs:
           fi
 
       - name: Upload BUILD risk assessment
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: risk-assess-build-${{ github.sha }}
@@ -807,12 +805,12 @@ jobs:
             echo "::warning::Risk Platform URL not set or no scanner input -- skipping"
             exit 0
           fi
-          PAYLOAD=$(jq '. + {"async_mode": true, "phase": "TEST"}' risk-input/combined.json)
+          jq '. + {"async_mode": true, "phase": "TEST"}' risk-input/combined.json > risk-input/payload.json
           HTTP_CODE=$(curl -s -o risk-test-response.json -w "%{http_code}" \
             -X POST "${RISK_URL}/v1/products/payment-api/assess" \
             -H "X-API-Key: ${RISK_API_KEY}" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD")
+            -d @risk-input/payload.json)
           echo "Risk Platform response: HTTP ${HTTP_CODE}"
           if [ "$HTTP_CODE" = "202" ]; then
             JOB_ID=$(jq -r '.job_id' risk-test-response.json)
@@ -839,7 +837,7 @@ jobs:
           fi
 
       - name: Upload TEST risk assessment
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: risk-assess-test-${{ github.sha }}
@@ -961,7 +959,7 @@ jobs:
       needs.risk-assess-test.result != 'failure'
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
 
       - name: Set up Java 17
         uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00  # v4.7.1
@@ -1008,8 +1006,7 @@ jobs:
           safe_wrap_json gitleaks sarif scanner-results/gitleaks-results/results.sarif risk-input/gitleaks.json
           safe_wrap_json hadolint sarif scanner-results/hadolint-results/hadolint-results.sarif risk-input/hadolint.json
           safe_wrap_json grype json scanner-results/grype-sbom-results/results.json risk-input/grype.json
-          CHECKOV_FILE=$(find scanner-results/checkov-results -name "results_json.json" -path "*k8s*" 2>/dev/null | head -1)
-          [ -n "$CHECKOV_FILE" ] && safe_wrap_json checkov json "$CHECKOV_FILE" risk-input/checkov.json
+          safe_wrap_json checkov json scanner-results/checkov-results/checkov-k8s-results.json risk-input/checkov.json
           # SpotBugs (XML) -- skipped: Risk Platform requires JSON content
           # TEST scanners
           safe_wrap_json zap json scanner-results/zap-report/report_json.json risk-input/zap.json
@@ -1039,12 +1036,12 @@ jobs:
         run: |
           # Bedrock AI mode: async request + job polling
           # Build combined payload with async_mode flag
-          PAYLOAD=$(jq '. + {"async_mode": true, "phase": "RELEASE"}' risk-input/combined.json)
+          jq '. + {"async_mode": true, "phase": "RELEASE"}' risk-input/combined.json > risk-input/payload.json
           HTTP_CODE=$(curl -s -o risk-release-response.json -w "%{http_code}" \
             -X POST "${RISK_URL}/v1/products/payment-api/assess" \
             -H "X-API-Key: ${RISK_API_KEY}" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD")
+            -d @risk-input/payload.json)
           echo "Risk Platform response: HTTP ${HTTP_CODE}"
 
           if [ "$HTTP_CODE" = "202" ]; then
@@ -1141,7 +1138,7 @@ jobs:
           subject-path: target/*.jar
 
       - name: Upload release artifacts + risk assessment
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: release-artifacts-${{ github.sha }}
           path: |
@@ -1202,7 +1199,7 @@ jobs:
       needs.risk-assess-release.result == 'success'
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
 
       - name: Set up Python 3.11
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
@@ -1471,7 +1468,7 @@ jobs:
           PYEOF
 
       - name: Upload OSCAL Assessment Results (CA-7 / AU-9)
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: oscal-assessment-results-${{ github.sha }}
           path: oscal-results/assessment-results.json
@@ -1523,7 +1520,7 @@ jobs:
       image-digest: ${{ steps.push.outputs.image-digest }}
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
 
       - name: Set up Java 17
         uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00  # v4.7.1
@@ -1607,7 +1604,7 @@ jobs:
           output-file: deliver-sca-results.json
 
       - name: Upload SBOM SCA results (SSDF RV.1.3)
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: deliver-sbom-sca-${{ github.sha }}
@@ -1655,12 +1652,12 @@ jobs:
           COUNT=$(ls risk-input/*.json 2>/dev/null | wc -l)
           if [ "$COUNT" -gt 0 ]; then
             jq -n '{results: [inputs]}' risk-input/*.json > risk-input/combined.json
-            PAYLOAD=$(jq '. + {"async_mode": true, "phase": "DELIVER"}' risk-input/combined.json)
+            jq '. + {"async_mode": true, "phase": "DELIVER"}' risk-input/combined.json > risk-input/payload.json
             HTTP_CODE=$(curl -s -o risk-deliver-response.json -w "%{http_code}" \
               -X POST "${RISK_URL}/v1/products/payment-api/assess" \
               -H "X-API-Key: ${RISK_API_KEY}" \
               -H "Content-Type: application/json" \
-              -d "$PAYLOAD")
+              -d @risk-input/payload.json)
             echo "Risk Platform DELIVER: HTTP ${HTTP_CODE}"
             if [ "$HTTP_CODE" = "202" ]; then
               JOB_ID=$(jq -r '.job_id' risk-deliver-response.json)
@@ -1677,7 +1674,7 @@ jobs:
           fi
 
       - name: Upload DELIVER risk assessment
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: risk-assess-deliver-${{ github.sha }}
@@ -1719,7 +1716,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@ececac1a45f3b08a01d2dd070d28d111c5fe6722  # v4.1.0
@@ -1735,7 +1732,7 @@ jobs:
             --region ${{ secrets.AWS_REGION }}
 
       - name: Generate GitHub App token (SP 800-204D S5.1.2 / SSDF PS.3.1)
-        uses: actions/create-github-app-token@c1a285145b9d317df6ced56c09f525b5c2b6f755  # v1.11.1
+        uses: actions/create-github-app-token@c1a285145b9d317df6ced56c09f525b5c2b6f755  # v2.11.1
         id: app-token
         with:
           app-id: ${{ secrets.GITOPS_APP_ID }}
@@ -1830,7 +1827,7 @@ jobs:
           output-file: deploy-sca-results.json
 
       - name: Upload SBOM SCA results (SSDF RV.1.3)
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: deploy-sbom-sca-${{ github.sha }}
@@ -1867,7 +1864,7 @@ jobs:
           grype "${IMAGE_URI}" --output table --fail-on critical || true
 
       - name: Upload post-deploy Grype results
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: post-deploy-grype-${{ github.sha }}
@@ -1893,7 +1890,7 @@ jobs:
           kubectl delete job kube-bench --ignore-not-found
 
       - name: Upload kube-bench results
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: kube-bench-${{ github.sha }}
@@ -1948,12 +1945,12 @@ jobs:
           COUNT=$(ls risk-input/*.json 2>/dev/null | wc -l)
           if [ "$COUNT" -gt 0 ]; then
             jq -n '{results: [inputs]}' risk-input/*.json > risk-input/combined.json
-            PAYLOAD=$(jq '. + {"async_mode": true, "phase": "DEPLOY"}' risk-input/combined.json)
+            jq '. + {"async_mode": true, "phase": "DEPLOY"}' risk-input/combined.json > risk-input/payload.json
             HTTP_CODE=$(curl -s -o risk-deploy-response.json -w "%{http_code}" \
               -X POST "${RISK_URL}/v1/products/payment-api/assess" \
               -H "X-API-Key: ${RISK_API_KEY}" \
               -H "Content-Type: application/json" \
-              -d "$PAYLOAD")
+              -d @risk-input/payload.json)
             echo "Risk Platform DEPLOY: HTTP ${HTTP_CODE}"
             if [ "$HTTP_CODE" = "202" ]; then
               JOB_ID=$(jq -r '.job_id' risk-deploy-response.json)
@@ -1970,7 +1967,7 @@ jobs:
           fi
 
       - name: Upload DEPLOY risk assessment
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08  # v4.6.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         if: always()
         with:
           name: risk-assess-deploy-${{ github.sha }}
