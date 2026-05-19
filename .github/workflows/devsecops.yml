@@ -1756,7 +1756,7 @@ jobs:
             --region ${{ secrets.AWS_REGION }}
 
       - name: Generate GitHub App token (SP 800-204D S5.1.2 / SSDF PS.3.1)
-        uses: actions/create-github-app-token@c1a285145b9d317df6ced56c09f525b5c2b6f755  # v2.11.1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v2.11.1
         id: app-token
         with:
           app-id: ${{ secrets.GITOPS_APP_ID }}
