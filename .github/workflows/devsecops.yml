@@ -40,6 +40,10 @@ jobs:
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz \
             | tar xz -C /usr/local/bin gitleaks
           gitleaks git --source=. --no-banner --report-format sarif --report-path results.sarif || true
+          # gitleaks creates no file when 0 findings -- create empty SARIF
+          if [ ! -f results.sarif ]; then
+            echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"gitleaks"}},"results":[]}]}' > results.sarif
+          fi
           FINDINGS=$(jq '.runs[0].results | length' results.sarif 2>/dev/null || echo 0)
           echo "Gitleaks: ${FINDINGS} findings"
           if [ "$FINDINGS" -gt 0 ]; then
@@ -344,7 +348,7 @@ jobs:
         run: |
           curl -sSfL -o /tmp/grype.tar.gz \
             https://github.com/anchore/grype/releases/download/v0.112.0/grype_0.112.0_linux_amd64.tar.gz
-          echo "7e0be2e9ebef42f38a2a5e5be84db9d21e0b9ad5e21a13ad8bcf26fa1f7e3e73  /tmp/grype.tar.gz" | sha256sum -c
+          echo "acb14a030010fe9bdb9594b4ae108d9d14ef2f926d936aa0916dc62c89c058ea  /tmp/grype.tar.gz" | sha256sum -c
           tar xzf /tmp/grype.tar.gz -C /usr/local/bin grype
           grype sbom:target/payment-api-sbom.json -o json > results.json 2>/dev/null || echo '{"matches":[]}' > results.json
           MATCHES=$(jq '.matches | length' results.json 2>/dev/null || echo 0)
@@ -536,7 +540,7 @@ jobs:
         run: |
           curl -sSfL -o /tmp/grype.tar.gz \
             https://github.com/anchore/grype/releases/download/v0.112.0/grype_0.112.0_linux_amd64.tar.gz
-          echo "7e0be2e9ebef42f38a2a5e5be84db9d21e0b9ad5e21a13ad8bcf26fa1f7e3e73  /tmp/grype.tar.gz" | sha256sum -c
+          echo "acb14a030010fe9bdb9594b4ae108d9d14ef2f926d936aa0916dc62c89c058ea  /tmp/grype.tar.gz" | sha256sum -c
           tar xzf /tmp/grype.tar.gz -C /usr/local/bin grype
           grype payment-api:latest -o json > results.json 2>/dev/null || echo '{"matches":[]}' > results.json
           MATCHES=$(jq '.matches | length' results.json 2>/dev/null || echo 0)
