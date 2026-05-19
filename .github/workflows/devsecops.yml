@@ -328,9 +328,9 @@ jobs:
       - name: Ensure Grype SBOM output exists
         if: always()
         run: |
-          # anchore/scan-action이 빈 파일을 생성하는 경우 대비
+          # anchore/scan-action may produce empty file
           if [ ! -s results.json ]; then
-            echo "::warning::Grype SBOM results.json is empty — running grype CLI fallback"
+            echo "::warning::Grype SBOM results.json is empty -- running grype CLI fallback"
             curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.112.0 || true
             grype sbom:target/payment-api-sbom.json -o json > results.json 2>/dev/null || echo '{"matches":[]}' > results.json
           fi
@@ -399,7 +399,7 @@ jobs:
         run: |
           curl -sSfL -o /tmp/trivy.tar.gz \
             https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
-          # SHA256 hardcoded — update when bumping Trivy version
+          # SHA256 hardcoded -- update when bumping Trivy version
           # Verify: curl -sSfL https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz | sha256sum
           echo "8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9  /tmp/trivy.tar.gz" | sha256sum -c
           tar xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy
@@ -412,9 +412,9 @@ jobs:
             --format json \
             --output target/trivy-cis-results.json \
             payment-api:latest || true
-          # Trivy가 실패하거나 빈 파일을 생성한 경우 대비
+          # Trivy may fail or produce empty file
           if [ ! -s target/trivy-cis-results.json ]; then
-            echo "::warning::Trivy CIS output empty — generating fallback"
+            echo "::warning::Trivy CIS output empty -- generating fallback"
             trivy image --format json --output target/trivy-cis-results.json \
               payment-api:latest 2>/dev/null || \
               echo '{"Results":[]}' > target/trivy-cis-results.json
@@ -530,7 +530,7 @@ jobs:
         if: always()
         run: |
           if [ ! -s results.json ]; then
-            echo "::warning::Grype Image results.json is empty — running grype CLI fallback"
+            echo "::warning::Grype Image results.json is empty -- running grype CLI fallback"
             curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.112.0 || true
             grype payment-api:latest -o json > results.json 2>/dev/null || echo '{"matches":[]}' > results.json
           fi
@@ -547,7 +547,7 @@ jobs:
   # ══════════════════════════════════════════════════════════════
   # RISK ASSESSMENT Phase (replaces release-gate)
   # SP 800-30 Rev 1: Integrated risk assessment via Risk Platform
-  # 6-phase coverage: DEVELOP → BUILD → TEST → RELEASE(gate) → DELIVER → DEPLOY
+  # 6-phase coverage: DEVELOP -> BUILD -> TEST -> RELEASE(gate) -> DELIVER -> DEPLOY
   # ══════════════════════════════════════════════════════════════
 
   risk-assess-develop:
@@ -596,16 +596,16 @@ jobs:
           fi
           echo "DEVELOP scanners collected: ${COUNT} files"
 
-      - name: Risk Assessment — DEVELOP (RA-3, CA-2 / SP 800-30)
+      - name: Risk Assessment -- DEVELOP (RA-3, CA-2 / SP 800-30)
         if: always()
         env:
           RISK_API_KEY: ${{ secrets.RISK_PLATFORM_API_KEY }}
           RISK_URL: ${{ secrets.RISK_PLATFORM_URL }}
         run: |
-          # 결과 파일 사전 생성 (스텝 실패해도 artifact upload 가능)
+          # Pre-create result file (ensures artifact upload even if step fails)
           echo '{}' > risk-develop-result.json
           if [ -z "$RISK_URL" ] || [ ! -f risk-input/combined.json ]; then
-            echo "::warning::Risk Platform URL not set or no scanner input — skipping"
+            echo "::warning::Risk Platform URL not set or no scanner input -- skipping"
             exit 0
           fi
           PAYLOAD=$(jq '. + {"async_mode": true, "phase": "DEVELOP"}' risk-input/combined.json)
@@ -617,7 +617,7 @@ jobs:
           echo "Risk Platform response: HTTP ${HTTP_CODE}"
           if [ "$HTTP_CODE" = "202" ]; then
             JOB_ID=$(jq -r '.job_id' risk-develop-response.json)
-            echo "Job submitted: ${JOB_ID} — polling (max 3min)..."
+            echo "Job submitted: ${JOB_ID} -- polling (max 3min)..."
             for i in $(seq 1 18); do
               sleep 10
               STATUS=$(curl -s -H "X-API-Key: ${RISK_API_KEY}" "${RISK_URL}/v1/jobs/${JOB_ID}" | jq -r '.status // empty')
@@ -636,7 +636,7 @@ jobs:
             cp risk-develop-response.json risk-develop-result.json
             echo "Static mode response"
           else
-            echo "::warning::Risk Platform returned HTTP ${HTTP_CODE} — assessment skipped"
+            echo "::warning::Risk Platform returned HTTP ${HTTP_CODE} -- assessment skipped"
           fi
 
       - name: Upload DEVELOP risk assessment
@@ -673,15 +673,15 @@ jobs:
             fi
           }
           # BUILD scanners only (DEVELOP scanners moved to risk-assess-develop)
-          # SpotBugs (XML) — skipped: Risk Platform requires JSON content
+          # SpotBugs (XML) -- skipped: Risk Platform requires JSON content
           # Grype SBOM SCA (JSON)
           safe_wrap_json grype json scanner-results/grype-sbom-results/results.json risk-input/grype-sbom.json
           # Hadolint (SARIF)
           safe_wrap_json hadolint sarif scanner-results/hadolint-results/hadolint-results.sarif risk-input/hadolint.json
-          # Checkov (JSON — output_file_path creates nested dir)
+          # Checkov (JSON -- output_file_path creates nested dir)
           CHECKOV_FILE=$(find scanner-results/checkov-results -name "results_json.json" -path "*k8s*" 2>/dev/null | head -1)
           [ -n "$CHECKOV_FILE" ] && safe_wrap_json checkov json "$CHECKOV_FILE" risk-input/checkov.json
-          # CIS Java (JSON — if available)
+          # CIS Java (JSON -- if available)
           safe_wrap_json cis-java json scanner-results/cis-java-results/cis-java-results.json risk-input/cis-java.json
           # Remove files with null content
           for f in risk-input/*.json; do
@@ -699,7 +699,7 @@ jobs:
           fi
           echo "BUILD scanners collected: ${COUNT} files"
 
-      - name: Risk Assessment — BUILD (RA-3, CA-2 / SP 800-30)
+      - name: Risk Assessment -- BUILD (RA-3, CA-2 / SP 800-30)
         if: always()
         env:
           RISK_API_KEY: ${{ secrets.RISK_PLATFORM_API_KEY }}
@@ -707,7 +707,7 @@ jobs:
         run: |
           echo '{}' > risk-build-result.json
           if [ -z "$RISK_URL" ] || [ ! -f risk-input/combined.json ]; then
-            echo "::warning::Risk Platform URL not set or no scanner input — skipping"
+            echo "::warning::Risk Platform URL not set or no scanner input -- skipping"
             exit 0
           fi
           PAYLOAD=$(jq '. + {"async_mode": true, "phase": "BUILD"}' risk-input/combined.json)
@@ -719,7 +719,7 @@ jobs:
           echo "Risk Platform response: HTTP ${HTTP_CODE}"
           if [ "$HTTP_CODE" = "202" ]; then
             JOB_ID=$(jq -r '.job_id' risk-build-response.json)
-            echo "Job submitted: ${JOB_ID} — polling (max 3min)..."
+            echo "Job submitted: ${JOB_ID} -- polling (max 3min)..."
             for i in $(seq 1 18); do
               sleep 10
               STATUS=$(curl -s -H "X-API-Key: ${RISK_API_KEY}" "${RISK_URL}/v1/jobs/${JOB_ID}" | jq -r '.status // empty')
@@ -738,7 +738,7 @@ jobs:
             cp risk-build-response.json risk-build-result.json
             echo "Static mode response"
           else
-            echo "::warning::Risk Platform returned HTTP ${HTTP_CODE} — assessment skipped"
+            echo "::warning::Risk Platform returned HTTP ${HTTP_CODE} -- assessment skipped"
           fi
 
       - name: Upload BUILD risk assessment
@@ -796,7 +796,7 @@ jobs:
           fi
           echo "TEST scanners collected: ${COUNT} files"
 
-      - name: Risk Assessment — TEST (RA-3, CA-2 / SP 800-30)
+      - name: Risk Assessment -- TEST (RA-3, CA-2 / SP 800-30)
         if: always()
         env:
           RISK_API_KEY: ${{ secrets.RISK_PLATFORM_API_KEY }}
@@ -804,7 +804,7 @@ jobs:
         run: |
           echo '{}' > risk-test-result.json
           if [ -z "$RISK_URL" ] || [ ! -f risk-input/combined.json ]; then
-            echo "::warning::Risk Platform URL not set or no scanner input — skipping"
+            echo "::warning::Risk Platform URL not set or no scanner input -- skipping"
             exit 0
           fi
           PAYLOAD=$(jq '. + {"async_mode": true, "phase": "TEST"}' risk-input/combined.json)
@@ -816,7 +816,7 @@ jobs:
           echo "Risk Platform response: HTTP ${HTTP_CODE}"
           if [ "$HTTP_CODE" = "202" ]; then
             JOB_ID=$(jq -r '.job_id' risk-test-response.json)
-            echo "Job submitted: ${JOB_ID} — polling (max 3min)..."
+            echo "Job submitted: ${JOB_ID} -- polling (max 3min)..."
             for i in $(seq 1 18); do
               sleep 10
               STATUS=$(curl -s -H "X-API-Key: ${RISK_API_KEY}" "${RISK_URL}/v1/jobs/${JOB_ID}" | jq -r '.status // empty')
@@ -835,7 +835,7 @@ jobs:
             cp risk-test-response.json risk-test-result.json
             echo "Static mode response"
           else
-            echo "::warning::Risk Platform returned HTTP ${HTTP_CODE} — assessment skipped"
+            echo "::warning::Risk Platform returned HTTP ${HTTP_CODE} -- assessment skipped"
           fi
 
       - name: Upload TEST risk assessment
@@ -846,7 +846,7 @@ jobs:
           path: risk-test-result.json
           retention-days: 90
 
-  # PR Risk Assessment Summary — 리뷰어에게 보안 상태 자동 게시
+  # PR Risk Assessment Summary -- 리뷰어에게 보안 상태 자동 게시
   risk-summary-pr:
     name: "[RISK] PR Security Summary"
     runs-on: ubuntu-latest
@@ -904,7 +904,7 @@ jobs:
             const emoji = blocked ? '🔴' : (totalFindings.medium > 0 ? '🟡' : '🟢');
             const verdict = blocked ? 'DATO (배포 차단 예상)' : 'ATO (배포 가능 예상)';
 
-            const body = `## ${emoji} Risk Assessment Summary — SP 800-30
+            const body = `## ${emoji} Risk Assessment Summary -- SP 800-30
 
             **예상 판정:** ${verdict}
             **총 Findings:** ${total} (Critical: ${totalFindings.critical}, High: ${totalFindings.high}, Medium: ${totalFindings.medium}, Low: ${totalFindings.low})
@@ -918,7 +918,7 @@ jobs:
             ---
 
             > 📋 이 결과는 PR 시점의 **정보 수집용**입니다. 정식 ATO/DATO 판정은 Merge 후 RELEASE gate에서 수행됩니다.
-            > 🔍 상세 결과: Actions 탭 → 각 RISK 잡의 artifact 참조
+            > 🔍 상세 결과: Actions 탭 -> 각 RISK 잡의 artifact 참조
             > 📖 근거: DoD DevSecOps Guidebook v2.5 Table 5-7, SSDF RV.2.1, SP 800-204D §5.1.1`;
 
             // 기존 Risk Assessment 코멘트가 있으면 업데이트, 없으면 새로 생성
@@ -929,7 +929,7 @@ jobs:
             });
 
             const existing = comments.data.find(c =>
-              c.body.includes('Risk Assessment Summary — SP 800-30') &&
+              c.body.includes('Risk Assessment Summary -- SP 800-30') &&
               c.user.type === 'Bot'
             );
 
@@ -1010,7 +1010,7 @@ jobs:
           safe_wrap_json grype json scanner-results/grype-sbom-results/results.json risk-input/grype.json
           CHECKOV_FILE=$(find scanner-results/checkov-results -name "results_json.json" -path "*k8s*" 2>/dev/null | head -1)
           [ -n "$CHECKOV_FILE" ] && safe_wrap_json checkov json "$CHECKOV_FILE" risk-input/checkov.json
-          # SpotBugs (XML) — skipped: Risk Platform requires JSON content
+          # SpotBugs (XML) -- skipped: Risk Platform requires JSON content
           # TEST scanners
           safe_wrap_json zap json scanner-results/zap-report/report_json.json risk-input/zap.json
           safe_wrap_json grype-image json scanner-results/grype-image-results/results.json risk-input/grype-image.json
@@ -1031,7 +1031,7 @@ jobs:
           fi
           echo "RELEASE: ALL scanners collected: ${COUNT} files"
 
-      - name: Integrated Risk Assessment — RELEASE GATE (RA-3, CA-2, CA-5 / SP 800-30)
+      - name: Integrated Risk Assessment -- RELEASE GATE (RA-3, CA-2, CA-5 / SP 800-30)
         id: risk-gate
         env:
           RISK_API_KEY: ${{ secrets.RISK_PLATFORM_API_KEY }}
@@ -1048,9 +1048,9 @@ jobs:
           echo "Risk Platform response: HTTP ${HTTP_CODE}"
 
           if [ "$HTTP_CODE" = "202" ]; then
-            # Async accepted — poll for completion (max 5 min, 10s interval)
+            # Async accepted -- poll for completion (max 5 min, 10s interval)
             JOB_ID=$(jq -r '.job_id' risk-release-response.json)
-            echo "Job submitted: ${JOB_ID} — polling for Bedrock AI assessment..."
+            echo "Job submitted: ${JOB_ID} -- polling for Bedrock AI assessment..."
             for i in $(seq 1 30); do
               sleep 10
               JOB_RESPONSE=$(curl -s -H "X-API-Key: ${RISK_API_KEY}" \
@@ -1062,13 +1062,13 @@ jobs:
                 break
               fi
               if [ "$STATUS" = "failed" ]; then
-                echo "::warning::Bedrock AI assessment failed — falling back to static result"
+                echo "::warning::Bedrock AI assessment failed -- falling back to static result"
                 echo "$JOB_RESPONSE" | jq '.' > risk-release-result.json
                 break
               fi
             done
             if [ "$STATUS" != "completed" ] && [ "$STATUS" != "failed" ]; then
-              echo "::warning::Bedrock AI assessment timed out (5min) — using fallback gate"
+              echo "::warning::Bedrock AI assessment timed out (5min) -- using fallback gate"
               FAIL=0
               [ "${{ needs.integration-dast.result }}" != "success" ] && FAIL=1
               [ "${{ needs.sca-grype-image.result }}" == "failure" ] && FAIL=1
@@ -1082,8 +1082,8 @@ jobs:
             cp risk-release-response.json risk-release-result.json
             echo "Static mode response received"
           else
-            # Platform unavailable — fallback gate
-            echo "::warning::Risk Platform unavailable (HTTP ${HTTP_CODE}) — using fallback gate"
+            # Platform unavailable -- fallback gate
+            echo "::warning::Risk Platform unavailable (HTTP ${HTTP_CODE}) -- using fallback gate"
             FAIL=0
             [ "${{ needs.integration-dast.result }}" != "success" ] && FAIL=1 && echo "::error::Fallback: integration-dast failed"
             [ "${{ needs.sca-grype-image.result }}" == "failure" ] && FAIL=1 && echo "::error::Fallback: sca-grype-image failed"
@@ -1103,11 +1103,11 @@ jobs:
               r = json.load(f)
           auth = r.get('authorization')
           if auth is None:
-              print('::error::Risk Platform returned no authorization field — blocking deployment')
+              print('::error::Risk Platform returned no authorization field -- blocking deployment')
               sys.exit(1)
           decision = auth.get('decision', '')
           if decision not in ('ATO', 'DATO'):
-              print(f'::error::Unknown authorization decision: {decision} — treating as DATO')
+              print(f'::error::Unknown authorization decision: {decision} -- treating as DATO')
               sys.exit(1)
           risk = r.get('risk_level', 'unknown')
           findings = r.get('total_findings', 0)
@@ -1115,9 +1115,9 @@ jobs:
           print(f'Findings: {findings}')
           print(f'Decision: {decision}')
           if decision == 'DATO':
-              print('::error::Risk Assessment: DATO — deployment blocked')
+              print('::error::Risk Assessment: DATO -- deployment blocked')
               sys.exit(1)
-          print('Risk Assessment: ATO — proceeding to DELIVER')
+          print('Risk Assessment: ATO -- proceeding to DELIVER')
           GATE
 
       - name: Download SBOM for release SCA
@@ -1162,7 +1162,7 @@ jobs:
       - name: Risk Gate Decision Record (SP 800-30 / DoD Table 8 / CM-3)
         if: always()
         run: |
-          echo "## Release Gate — SP 800-30 Risk Assessment" >> $GITHUB_STEP_SUMMARY
+          echo "## Release Gate -- SP 800-30 Risk Assessment" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
           echo "**Time:** $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_STEP_SUMMARY
@@ -1627,7 +1627,7 @@ jobs:
           aws s3 cp target/payment-api-sbom.json \
             s3://${{ secrets.S3_EVIDENCE_BUCKET }}/sbom/${{ github.sha }}/payment-api-sbom.json
 
-      - name: Risk Assessment — DELIVER (RA-3, CA-7 / SP 800-30)
+      - name: Risk Assessment -- DELIVER (RA-3, CA-7 / SP 800-30)
         if: always()
         env:
           RISK_API_KEY: ${{ secrets.RISK_PLATFORM_API_KEY }}
@@ -1664,7 +1664,7 @@ jobs:
             echo "Risk Platform DELIVER: HTTP ${HTTP_CODE}"
             if [ "$HTTP_CODE" = "202" ]; then
               JOB_ID=$(jq -r '.job_id' risk-deliver-response.json)
-              echo "Job submitted: ${JOB_ID} — polling (max 3min)..."
+              echo "Job submitted: ${JOB_ID} -- polling (max 3min)..."
               for i in $(seq 1 18); do
                 sleep 10
                 STATUS=$(curl -s -H "X-API-Key: ${RISK_API_KEY}" "${RISK_URL}/v1/jobs/${JOB_ID}" | jq -r '.status // empty')
@@ -1788,13 +1788,13 @@ jobs:
           # Wait with 600s timeout (increased from 300s for rolling update headroom)
           if ! argocd app wait payment-api \
             --sync --health --timeout 600 --grpc-web; then
-            echo "::warning::ArgoCD wait timed out — checking current state"
+            echo "::warning::ArgoCD wait timed out -- checking current state"
             STATE=$(argocd app get payment-api --grpc-web -o json | jq -r '.status.health.status')
             echo "Health: ${STATE}"
             if [ "$STATE" = "Healthy" ] || [ "$STATE" = "Progressing" ]; then
-              echo "App is ${STATE} — continuing (deployment may still be rolling)"
+              echo "App is ${STATE} -- continuing (deployment may still be rolling)"
             else
-              echo "::error::ArgoCD app is ${STATE} — deployment failed"
+              echo "::error::ArgoCD app is ${STATE} -- deployment failed"
               exit 1
             fi
           fi
@@ -1852,7 +1852,7 @@ jobs:
         run: |
           curl -sSfL -o /tmp/grype.tar.gz \
             https://github.com/anchore/grype/releases/download/v0.112.0/grype_0.112.0_linux_amd64.tar.gz
-          # SHA256 hardcoded — update when bumping Grype version
+          # SHA256 hardcoded -- update when bumping Grype version
           # Verify: curl -sSfL https://github.com/anchore/grype/releases/download/v0.112.0/grype_0.112.0_linux_amd64.tar.gz | sha256sum
           echo "acb14a030010fe9bdb9594b4ae108d9d14ef2f926d936aa0916dc62c89c058ea  /tmp/grype.tar.gz" | sha256sum -c
           tar xzf /tmp/grype.tar.gz -C /usr/local/bin grype
@@ -1914,7 +1914,7 @@ jobs:
           aws s3 cp /tmp/deploy-manifest.json \
             s3://${{ secrets.S3_EVIDENCE_BUCKET }}/deploy/${{ github.sha }}/manifest.json
 
-      - name: Risk Assessment — DEPLOY (RA-3, CA-7 / SP 800-30 / cATO ConMon)
+      - name: Risk Assessment -- DEPLOY (RA-3, CA-7 / SP 800-30 / cATO ConMon)
         if: always()
         env:
           RISK_API_KEY: ${{ secrets.RISK_PLATFORM_API_KEY }}
@@ -1957,7 +1957,7 @@ jobs:
             echo "Risk Platform DEPLOY: HTTP ${HTTP_CODE}"
             if [ "$HTTP_CODE" = "202" ]; then
               JOB_ID=$(jq -r '.job_id' risk-deploy-response.json)
-              echo "Job submitted: ${JOB_ID} — polling (max 3min)..."
+              echo "Job submitted: ${JOB_ID} -- polling (max 3min)..."
               for i in $(seq 1 18); do
                 sleep 10
                 STATUS=$(curl -s -H "X-API-Key: ${RISK_API_KEY}" "${RISK_URL}/v1/jobs/${JOB_ID}" | jq -r '.status // empty')
@@ -1990,7 +1990,7 @@ jobs:
           echo "## DEPLOY Phase Complete" >> $GITHUB_STEP_SUMMARY
           echo "| Image Tag | ${{ needs.deliver.outputs.image-tag }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Image Digest | ${{ needs.deliver.outputs.image-digest }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Deploy method | GitOps → jccompany-gitops ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deploy method | GitOps -> jccompany-gitops ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| ArgoCD sync | waited (timeout 600s, graceful fallback) ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| SBOM SCA at DEPLOY | ✅ (DoD Table 10) |" >> $GITHUB_STEP_SUMMARY
           echo "| Post-deploy Grype | ✅ (v0.112.0 pinned) |" >> $GITHUB_STEP_SUMMARY
