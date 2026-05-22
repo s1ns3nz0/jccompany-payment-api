@@ -45,7 +45,7 @@ jobs:
             https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz
           # SHA256 hardcoded -- update when bumping Gitleaks version
           # Verify: curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz | sha256sum
-          echo "fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e  /tmp/gitleaks.tar.gz" | sha256sum -c
+          echo "PLACEHOLDER_GITLEAKS_SHA256  /tmp/gitleaks.tar.gz" | sha256sum -c
           tar xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
           gitleaks git --source=. --no-banner --report-format sarif --report-path results.sarif || true
           # gitleaks creates no file when 0 findings -- create empty SARIF
@@ -154,6 +154,7 @@ jobs:
 
       - name: Upload JAR
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        if: always()
         with:
           name: jar-${{ steps.meta.outputs.git-sha }}
           path: target/*.jar
@@ -161,6 +162,7 @@ jobs:
 
       - name: Upload Docker image
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        if: always()
         with:
           name: docker-image-${{ steps.meta.outputs.git-sha }}
           path: payment-api-image.tar.gz
@@ -168,6 +170,7 @@ jobs:
 
       - name: Upload SBOM (SSDF PS.3 / SR-3)
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        if: always()
         with:
           name: sbom-${{ steps.meta.outputs.git-sha }}
           path: |
@@ -1176,6 +1179,7 @@ jobs:
 
       - name: Upload release artifacts + risk assessment
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        if: always()
         with:
           name: release-artifacts-${{ github.sha }}
           path: |
@@ -1234,34 +1238,47 @@ jobs:
         env:
           LOKI_URL: https://loki.miata.cloud
         run: |
-          DECISION="UNKNOWN"
-          FINDINGS=0
-          RISK_LEVEL="unknown"
-          if [ -f risk-release-result.json ]; then
-            DECISION=$(python3 -c "
-          import json
-          with open('risk-release-result.json') as f:
-              r = json.load(f)
-          print(r.get('authorization', {}).get('decision', 'UNKNOWN'))
-          " 2>/dev/null || echo "UNKNOWN")
-            FINDINGS=$(python3 -c "
-          import json
-          with open('risk-release-result.json') as f:
-              r = json.load(f)
-          print(r.get('findings_count', 0))
-          " 2>/dev/null || echo "0")
-            RISK_LEVEL=$(python3 -c "
-          import json
-          with open('risk-release-result.json') as f:
-              r = json.load(f)
-          print(r.get('gate', {}).get('risk_level', 'unknown'))
-          " 2>/dev/null || echo "unknown")
-          fi
+          # Extract all metrics safely (no eval)
+          python3 -c "
+          import json, os
+          d = {'decision':'UNKNOWN','findings':0,'risk_level':'unknown',
+               'critical':0,'high':0,'medium':0,'low':0,'sar_coverage':0}
+          if os.path.exists('risk-release-result.json'):
+              with open('risk-release-result.json') as f:
+                  r = json.load(f)
+              d['decision'] = r.get('authorization', {}).get('decision', 'UNKNOWN')
+              d['findings'] = r.get('findings_count', 0)
+              d['risk_level'] = r.get('authorization', {}).get('risk_level', 'unknown')
+              fc = r.get('gate', {}).get('findings_count', {})
+              d['critical'] = fc.get('critical', 0)
+              d['high'] = fc.get('high', 0)
+              d['medium'] = fc.get('medium', 0)
+              d['low'] = fc.get('low', 0)
+              d['sar_coverage'] = r.get('sar', {}).get('coverage_percentage', 0)
+          with open('/tmp/dora-vars.json', 'w') as f:
+              json.dump(d, f)
+          " 2>/dev/null || echo '{}' > /tmp/dora-vars.json
+          DORA_DECISION=$(jq -r '.decision // "UNKNOWN"' /tmp/dora-vars.json)
+          DORA_FINDINGS=$(jq -r '.findings // 0' /tmp/dora-vars.json)
+          DORA_RISK_LEVEL=$(jq -r '.risk_level // "unknown"' /tmp/dora-vars.json)
+          DORA_CRITICAL=$(jq -r '.critical // 0' /tmp/dora-vars.json)
+          DORA_HIGH=$(jq -r '.high // 0' /tmp/dora-vars.json)
+          DORA_MEDIUM=$(jq -r '.medium // 0' /tmp/dora-vars.json)
+          DORA_LOW=$(jq -r '.low // 0' /tmp/dora-vars.json)
+          DORA_SAR_COVERAGE=$(jq -r '.sar_coverage // 0' /tmp/dora-vars.json)
+          # Lead time: commit timestamp to now
           COMMIT_TIME=$(git log -1 --format=%ct 2>/dev/null || echo "0")
           NOW=$(date +%s)
           LEAD_TIME=$((NOW - COMMIT_TIME))
+          # Pipeline duration: run start to now
+          if [ -n "$GITHUB_RUN_STARTED_AT" ]; then
+            RUN_START=$(date -d "$GITHUB_RUN_STARTED_AT" +%s 2>/dev/null || echo "0")
+            PIPELINE_DURATION=$((NOW - RUN_START))
+          else
+            PIPELINE_DURATION=0
+          fi
           NANO="${NOW}000000000"
-          echo "DORA push: decision=${DECISION} findings=${FINDINGS} lead_time=${LEAD_TIME}s"
+          echo "DORA push: decision=${DORA_DECISION} findings=${DORA_FINDINGS} C=${DORA_CRITICAL} H=${DORA_HIGH} M=${DORA_MEDIUM} L=${DORA_LOW} sar=${DORA_SAR_COVERAGE}% lead=${LEAD_TIME}s pipe=${PIPELINE_DURATION}s"
           curl -s -X POST "${LOKI_URL}/loki/api/v1/push" \
             -H "Content-Type: application/json" \
             -d "{
@@ -1269,12 +1286,12 @@ jobs:
                 \"stream\": {
                   \"job\": \"dora-metrics\",
                   \"product\": \"payment-api\",
-                  \"decision\": \"${DECISION}\",
-                  \"risk_level\": \"${RISK_LEVEL}\"
+                  \"decision\": \"${DORA_DECISION}\",
+                  \"risk_level\": \"${DORA_RISK_LEVEL}\"
                 },
                 \"values\": [[
                   \"${NANO}\",
-                  \"{\\\"decision\\\":\\\"${DECISION}\\\",\\\"findings\\\":${FINDINGS},\\\"risk_level\\\":\\\"${RISK_LEVEL}\\\",\\\"lead_time_sec\\\":${LEAD_TIME},\\\"commit\\\":\\\"${GITHUB_SHA::8}\\\",\\\"run_id\\\":\\\"${GITHUB_RUN_ID}\\\",\\\"actor\\\":\\\"${{ github.actor }}\\\"}\"
+                  \"{\\\"decision\\\":\\\"${DORA_DECISION}\\\",\\\"findings\\\":${DORA_FINDINGS},\\\"critical\\\":${DORA_CRITICAL},\\\"high\\\":${DORA_HIGH},\\\"medium\\\":${DORA_MEDIUM},\\\"low\\\":${DORA_LOW},\\\"risk_level\\\":\\\"${DORA_RISK_LEVEL}\\\",\\\"sar_coverage\\\":${DORA_SAR_COVERAGE},\\\"lead_time_sec\\\":${LEAD_TIME},\\\"pipeline_duration_sec\\\":${PIPELINE_DURATION},\\\"commit\\\":\\\"${GITHUB_SHA::8}\\\",\\\"run_id\\\":\\\"${GITHUB_RUN_ID}\\\",\\\"actor\\\":\\\"${{ github.actor }}\\\"}\"
                 ]]
               }]
             }" || echo "::warning::DORA Loki push failed (non-blocking)"
@@ -1565,6 +1582,7 @@ jobs:
 
       - name: Upload OSCAL Assessment Results (CA-7 / AU-9)
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        if: always()
         with:
           name: oscal-assessment-results-${{ github.sha }}
           path: oscal-results/assessment-results.json
@@ -1743,6 +1761,7 @@ jobs:
           fi
 
       - name: Upload SBOM to S3 (SSDF PS.3.2 / AU-9)
+        if: always()
         run: |
           aws s3 cp target/payment-api-sbom.json \
             s3://${{ secrets.S3_EVIDENCE_BUCKET }}/sbom/${{ github.sha }}/payment-api-sbom.json
@@ -1862,6 +1881,7 @@ jobs:
         uses: sigstore/cosign-installer@c56c2d3e59e4281cc41dea2217323ba5694b171e  # v3.8.0
 
       - name: Verify image signature (SI-7 / SP 800-204D S5.1.3)
+        id: cosign-sig
         env:
           IMAGE_DIGEST: ${{ needs.deliver.outputs.image-digest }}
         run: |
@@ -1875,6 +1895,7 @@ jobs:
           cat /tmp/cosign-verify.json | head -20
 
       - name: Verify SBOM attestation (SI-7, SR-3 / SP 800-204D S5.1.1)
+        id: cosign-att
         env:
           IMAGE_DIGEST: ${{ needs.deliver.outputs.image-digest }}
         run: |
@@ -1905,6 +1926,33 @@ jobs:
             [ -f "/tmp/$f" ] && aws s3 cp "/tmp/$f" \
               s3://${{ secrets.S3_EVIDENCE_BUCKET }}/deploy/${{ github.sha }}/$f
           done
+
+      - name: Push cosign verification to Loki (SI-7 / CA-7)
+        if: always()
+        env:
+          LOKI_URL: https://loki.miata.cloud
+          IMAGE_DIGEST: ${{ needs.deliver.outputs.image-digest }}
+          VERIFY_SIG: ${{ steps.cosign-sig.outcome }}
+          VERIFY_ATT: ${{ steps.cosign-att.outcome }}
+        run: |
+          NANO="$(date +%s)000000000"
+          echo "Cosign Loki push: sig=${VERIFY_SIG} att=${VERIFY_ATT}"
+          curl -s -X POST "${LOKI_URL}/loki/api/v1/push" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"streams\": [{
+                \"stream\": {
+                  \"job\": \"cosign-verify\",
+                  \"product\": \"payment-api\",
+                  \"sig_result\": \"${VERIFY_SIG}\",
+                  \"att_result\": \"${VERIFY_ATT}\"
+                },
+                \"values\": [[
+                  \"${NANO}\",
+                  \"{\\\"image_digest\\\":\\\"${IMAGE_DIGEST}\\\",\\\"sig_verify\\\":\\\"${VERIFY_SIG}\\\",\\\"sbom_verify\\\":\\\"${VERIFY_ATT}\\\",\\\"commit\\\":\\\"${GITHUB_SHA::8}\\\",\\\"run_id\\\":\\\"${GITHUB_RUN_ID}\\\"}\"
+                ]]
+              }]
+            }" || echo "::warning::Cosign Loki push failed (non-blocking)"
 
       - name: Generate GitHub App token (SP 800-204D S5.1.2 / SSDF PS.3.1)
         uses: actions/create-github-app-token@c1a285145b9d317df6ced56c09f525b5c2b6f755  # v2.11.1
@@ -2085,6 +2133,7 @@ jobs:
           fi
 
       - name: Upload deploy evidence to S3 (AU-9)
+        if: always()
         run: |
           kubectl get all -n payment-api -o json > /tmp/deploy-manifest.json
           aws s3 cp /tmp/deploy-manifest.json \
