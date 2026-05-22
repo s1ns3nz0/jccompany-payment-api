@@ -41,8 +41,12 @@ jobs:
 
       - name: Gitleaks (IA-5, SI-3, SR-3 / SSDF PS.1 / SP 800-204D S5.1.4)
         run: |
-          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz \
-            | tar xz -C /usr/local/bin gitleaks
+          curl -sSfL -o /tmp/gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz
+          # SHA256 hardcoded -- update when bumping Gitleaks version
+          # Verify: curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz | sha256sum
+          echo "fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e  /tmp/gitleaks.tar.gz" | sha256sum -c
+          tar xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
           gitleaks git --source=. --no-banner --report-format sarif --report-path results.sarif || true
           # gitleaks creates no file when 0 findings -- create empty SARIF
           if [ ! -f results.sarif ]; then
@@ -706,8 +710,7 @@ jobs:
           safe_wrap_json hadolint sarif scanner-results/hadolint-results/hadolint-results.sarif risk-input/hadolint.json
           # Checkov (JSON -- output_file_path creates nested dir)
           safe_wrap_json checkov json scanner-results/checkov-results/checkov-k8s-results.json risk-input/checkov.json
-          # CIS Java (JSON -- if available)
-          safe_wrap_json cis-java json scanner-results/cis-java-results/cis-java-results.json risk-input/cis-java.json
+          # CIS Java skipped -- custom shell script, plain text output, not in Risk Platform scanner list
           # Remove files with null content
           for f in risk-input/*.json; do
             if jq -e '.content == null' "$f" > /dev/null 2>&1; then
@@ -975,7 +978,7 @@ jobs:
             }
 
   risk-assess-release:
-    continue-on-error: true  # TEMP: testing cosign attest/verify pipeline
+    continue-on-error: true  # TEMP: remove after Risk Platform tuning (BUILD DATO 63 findings, TEST DATO 156 findings)
     name: "[RELEASE] Integrated Risk Gate (SP 800-30)"
     runs-on: ubuntu-latest
     needs: [risk-assess-develop, risk-assess-build, risk-assess-test, integration-dast, sca-grype-image, trivy-cis, sast-spotbugs]
@@ -1226,6 +1229,56 @@ jobs:
           echo "| Risk Assess BUILD | ${{ needs.risk-assess-build.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Risk Assess TEST | ${{ needs.risk-assess-test.result }} |" >> $GITHUB_STEP_SUMMARY
 
+      - name: Push DORA metrics to Loki (CA-7 / DORA Four Keys)
+        if: always()
+        env:
+          LOKI_URL: https://loki.miata.cloud
+        run: |
+          DECISION="UNKNOWN"
+          FINDINGS=0
+          RISK_LEVEL="unknown"
+          if [ -f risk-release-result.json ]; then
+            DECISION=$(python3 -c "
+          import json
+          with open('risk-release-result.json') as f:
+              r = json.load(f)
+          print(r.get('authorization', {}).get('decision', 'UNKNOWN'))
+          " 2>/dev/null || echo "UNKNOWN")
+            FINDINGS=$(python3 -c "
+          import json
+          with open('risk-release-result.json') as f:
+              r = json.load(f)
+          print(r.get('findings_count', 0))
+          " 2>/dev/null || echo "0")
+            RISK_LEVEL=$(python3 -c "
+          import json
+          with open('risk-release-result.json') as f:
+              r = json.load(f)
+          print(r.get('gate', {}).get('risk_level', 'unknown'))
+          " 2>/dev/null || echo "unknown")
+          fi
+          COMMIT_TIME=$(git log -1 --format=%ct 2>/dev/null || echo "0")
+          NOW=$(date +%s)
+          LEAD_TIME=$((NOW - COMMIT_TIME))
+          NANO="${NOW}000000000"
+          echo "DORA push: decision=${DECISION} findings=${FINDINGS} lead_time=${LEAD_TIME}s"
+          curl -s -X POST "${LOKI_URL}/loki/api/v1/push" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"streams\": [{
+                \"stream\": {
+                  \"job\": \"dora-metrics\",
+                  \"product\": \"payment-api\",
+                  \"decision\": \"${DECISION}\",
+                  \"risk_level\": \"${RISK_LEVEL}\"
+                },
+                \"values\": [[
+                  \"${NANO}\",
+                  \"{\\\"decision\\\":\\\"${DECISION}\\\",\\\"findings\\\":${FINDINGS},\\\"risk_level\\\":\\\"${RISK_LEVEL}\\\",\\\"lead_time_sec\\\":${LEAD_TIME},\\\"commit\\\":\\\"${GITHUB_SHA::8}\\\",\\\"run_id\\\":\\\"${GITHUB_RUN_ID}\\\",\\\"actor\\\":\\\"${{ github.actor }}\\\"}\"
+                ]]
+              }]
+            }" || echo "::warning::DORA Loki push failed (non-blocking)"
+
   # ==============================================================
   # COMPLIANCE Phase
   # ==============================================================
@@ -1391,9 +1444,11 @@ jobs:
           PYEOF
 
       - name: Push OSCAL Assessment Results to Loki (CA-7 / AU-2)
+        env:
+          LOKI_URL: https://loki.miata.cloud
         run: |
           python3 << 'PYEOF'
-          import json, time, urllib.request
+          import json, os, time, urllib.request
           from collections import defaultdict
 
           with open('oscal-results/assessment-results.json') as f:
@@ -1496,7 +1551,7 @@ jobs:
 
           payload = json.dumps({'streams': streams}).encode()
           req = urllib.request.Request(
-              'https://loki.miata.cloud/loki/api/v1/push',
+              os.environ['LOKI_URL'] + '/loki/api/v1/push',
               data=payload,
               headers={'Content-Type': 'application/json'},
               method='POST'
@@ -1709,7 +1764,7 @@ jobs:
             fi
           }
           # DELIVER scanners
-          safe_wrap_json deliver-sca json deliver-sca-results.json risk-input/deliver-sca.json
+          safe_wrap_json grype-sbom json deliver-sca-results.json risk-input/deliver-sca.json
           # Remove null content
           for f in risk-input/*.json; do
             if jq -e '.content == null' "$f" > /dev/null 2>&1; then
@@ -1815,7 +1870,7 @@ jobs:
           cosign verify \
             --certificate-identity-regexp="https://github.com/s1ns3nz0/jccompany-payment-api/" \
             --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
-            "$IMAGE_URI" > /tmp/cosign-verify.json 2>&1
+            "$IMAGE_URI" > /tmp/cosign-verify.json
           echo "Image signature verified"
           cat /tmp/cosign-verify.json | head -20
 
@@ -1829,7 +1884,7 @@ jobs:
             --type cyclonedx \
             --certificate-identity-regexp="https://github.com/s1ns3nz0/jccompany-payment-api/" \
             --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
-            "$IMAGE_URI" > /tmp/cosign-verify-attestation.json 2>&1
+            "$IMAGE_URI" > /tmp/cosign-verify-attestation.json
           echo "SBOM attestation verified -- supply chain integrity confirmed"
           cat /tmp/cosign-verify-attestation.json | head -20
 
@@ -2052,8 +2107,8 @@ jobs:
             fi
           }
           # DEPLOY scanners
-          safe_wrap_json deploy-sca json deploy-sca-results.json risk-input/deploy-sca.json
-          safe_wrap_json grype-postdeploy json /tmp/post-deploy-grype.json risk-input/grype-postdeploy.json
+          safe_wrap_json grype-sbom json deploy-sca-results.json risk-input/deploy-sca.json
+          safe_wrap_json grype-image json /tmp/post-deploy-grype.json risk-input/grype-postdeploy.json
           # kube-bench is text, wrap as raw string
           if [ -f /tmp/kube-bench.txt ]; then
             jq -n --arg s "kube-bench" --arg f "text" --rawfile c /tmp/kube-bench.txt \
