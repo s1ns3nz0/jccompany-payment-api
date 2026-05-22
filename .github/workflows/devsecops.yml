@@ -1636,9 +1636,24 @@ jobs:
 
       - name: Sign image with OIDC (SP 800-204D S5.1.3)
         run: |
-          IMAGE_URI="${{ secrets.ECR_REGISTRY }}/jccompany/payment-api:${{ steps.meta.outputs.image-tag }}"
-          cosign sign --yes $IMAGE_URI
+          IMAGE_URI="${{ secrets.ECR_REGISTRY }}/jccompany/payment-api@${{ steps.push.outputs.image-digest }}"
+          cosign sign --yes "$IMAGE_URI"
           echo "Image signed: $IMAGE_URI"
+
+      - name: SBOM Attestation (SP 800-204D S5.1.1 / SR-3, SA-10)
+        run: |
+          IMAGE_URI="${{ secrets.ECR_REGISTRY }}/jccompany/payment-api@${{ steps.push.outputs.image-digest }}"
+          SBOM_PATH="target/payment-api-sbom.json"
+          if [ ! -f "$SBOM_PATH" ]; then
+            echo "::error::SBOM not found at $SBOM_PATH"
+            exit 1
+          fi
+          echo "Attesting SBOM ($(wc -c < "$SBOM_PATH") bytes) to ${IMAGE_URI}"
+          if ! cosign attest --yes --type cyclonedx --predicate "$SBOM_PATH" "$IMAGE_URI" 2>&1; then
+            echo "::error::cosign attest failed -- check Fulcio/Rekor connectivity and ECR permissions"
+            exit 1
+          fi
+          echo "SBOM attestation attached to ${IMAGE_URI}"
 
       - name: Install Grype for SCA (SP 800-204D S5.1.2)
         run: |
@@ -1748,6 +1763,7 @@ jobs:
           echo "| Image Digest | ${{ steps.push.outputs.image-digest }} |" >> $GITHUB_STEP_SUMMARY
           echo "| ECR Push | [OK] |" >> $GITHUB_STEP_SUMMARY
           echo "| Cosign Signed | [OK] |" >> $GITHUB_STEP_SUMMARY
+          echo "| SBOM Attestation | [OK] (cosign attest cyclonedx) |" >> $GITHUB_STEP_SUMMARY
           echo "| SBOM SCA (post-push) | [OK] |" >> $GITHUB_STEP_SUMMARY
 
   # ==============================================================
@@ -1782,6 +1798,57 @@ jobs:
           aws eks update-kubeconfig \
             --name jccompany-eks \
             --region ${{ secrets.AWS_REGION }}
+
+      - name: Login to ECR (cosign verify needs registry access)
+        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076  # v2.0.1
+
+      - name: Install Cosign (SI-7 / SP 800-204D S5.1.3)
+        uses: sigstore/cosign-installer@c56c2d3e59e4281cc41dea2217323ba5694b171e  # v3.8.0
+
+      - name: Verify image signature (SI-7 / SP 800-204D S5.1.3)
+        env:
+          IMAGE_DIGEST: ${{ needs.deliver.outputs.image-digest }}
+        run: |
+          IMAGE_URI="${{ secrets.ECR_REGISTRY }}/jccompany/payment-api@${IMAGE_DIGEST}"
+          echo "Verifying signature: ${IMAGE_URI}"
+          cosign verify \
+            --certificate-identity-regexp="https://github.com/s1ns3nz0/jccompany-payment-api/" \
+            --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+            "$IMAGE_URI" > /tmp/cosign-verify.json 2>&1
+          echo "Image signature verified"
+          cat /tmp/cosign-verify.json | head -20
+
+      - name: Verify SBOM attestation (SI-7, SR-3 / SP 800-204D S5.1.1)
+        env:
+          IMAGE_DIGEST: ${{ needs.deliver.outputs.image-digest }}
+        run: |
+          IMAGE_URI="${{ secrets.ECR_REGISTRY }}/jccompany/payment-api@${IMAGE_DIGEST}"
+          echo "Verifying SBOM attestation: ${IMAGE_URI}"
+          cosign verify-attestation \
+            --type cyclonedx \
+            --certificate-identity-regexp="https://github.com/s1ns3nz0/jccompany-payment-api/" \
+            --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+            "$IMAGE_URI" > /tmp/cosign-verify-attestation.json 2>&1
+          echo "SBOM attestation verified -- supply chain integrity confirmed"
+          cat /tmp/cosign-verify-attestation.json | head -20
+
+      - name: Upload cosign verification evidence (AU-9)
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        if: always()
+        with:
+          name: cosign-verify-${{ github.sha }}
+          path: |
+            /tmp/cosign-verify.json
+            /tmp/cosign-verify-attestation.json
+          retention-days: 90
+
+      - name: Archive cosign verification to S3 (AU-9)
+        if: always()
+        run: |
+          for f in cosign-verify.json cosign-verify-attestation.json; do
+            [ -f "/tmp/$f" ] && aws s3 cp "/tmp/$f" \
+              s3://${{ secrets.S3_EVIDENCE_BUCKET }}/deploy/${{ github.sha }}/$f
+          done
 
       - name: Generate GitHub App token (SP 800-204D S5.1.2 / SSDF PS.3.1)
         uses: actions/create-github-app-token@c1a285145b9d317df6ced56c09f525b5c2b6f755  # v2.11.1
@@ -1900,9 +1967,6 @@ jobs:
             aws s3 cp deploy-sca-results.json \
               s3://${{ secrets.S3_EVIDENCE_BUCKET }}/deploy/${{ github.sha }}/sbom-sca.json
           fi
-
-      - name: Login to ECR (Grype image pull)
-        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076  # v2.0.1
 
       - name: Install Grype v0.112.0 (SHA-hardcoded / SP 800-204D S5.1.2)
         run: |
@@ -2046,9 +2110,11 @@ jobs:
           echo "## DEPLOY Phase Complete" >> $GITHUB_STEP_SUMMARY
           echo "| Image Tag | ${{ needs.deliver.outputs.image-tag }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Image Digest | ${{ needs.deliver.outputs.image-digest }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Cosign verify | [OK] (SI-7) |" >> $GITHUB_STEP_SUMMARY
+          echo "| SBOM attestation verify | [OK] (SR-3) |" >> $GITHUB_STEP_SUMMARY
           echo "| Deploy method | GitOps -> jccompany-gitops [OK] |" >> $GITHUB_STEP_SUMMARY
           echo "| ArgoCD sync | waited (timeout 600s, graceful fallback) [OK] |" >> $GITHUB_STEP_SUMMARY
           echo "| SBOM SCA at DEPLOY | [OK] (DoD Table 10) |" >> $GITHUB_STEP_SUMMARY
           echo "| Post-deploy Grype | [OK] (v0.112.0 pinned) |" >> $GITHUB_STEP_SUMMARY
           echo "| kube-bench | [OK] (SHA pinned) |" >> $GITHUB_STEP_SUMMARY
-          echo "| Evidence to S3 | manifest + grype + kube-bench + sbom-sca [OK] |" >> $GITHUB_STEP_SUMMARY
+          echo "| Evidence to S3 | manifest + grype + kube-bench + sbom-sca + cosign-verify [OK] |" >> $GITHUB_STEP_SUMMARY
