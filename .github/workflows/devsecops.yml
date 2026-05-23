@@ -1810,6 +1810,9 @@ jobs:
                 echo "  Poll ${i}/18: status=${STATUS}"
                 [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ] && break
               done
+              # Fetch completed result (polling only checked status, not the actual result)
+              curl -s -H "X-API-Key: ${RISK_API_KEY}" "${RISK_URL}/v1/jobs/${JOB_ID}" \
+                | jq '.result // .' > risk-deliver-response.json
             fi
           else
             echo "::warning::No DELIVER scanner results to assess"
@@ -2189,6 +2192,9 @@ jobs:
                 echo "  Poll ${i}/18: status=${STATUS}"
                 [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ] && break
               done
+              # Fetch completed result (polling only checked status, not the actual result)
+              curl -s -H "X-API-Key: ${RISK_API_KEY}" "${RISK_URL}/v1/jobs/${JOB_ID}" \
+                | jq '.result // .' > risk-deploy-response.json
             fi
           else
             echo "::warning::No DEPLOY scanner results to assess"
