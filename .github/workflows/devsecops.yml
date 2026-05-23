@@ -45,7 +45,7 @@ jobs:
             https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz
           # SHA256 hardcoded -- update when bumping Gitleaks version
           # Verify: curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz | sha256sum
-          echo "PLACEHOLDER_GITLEAKS_SHA256  /tmp/gitleaks.tar.gz" | sha256sum -c
+          echo "fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e  /tmp/gitleaks.tar.gz" | sha256sum -c
           tar xzf /tmp/gitleaks.tar.gz -C /usr/local/bin gitleaks
           gitleaks git --source=. --no-banner --report-format sarif --report-path results.sarif || true
           # gitleaks creates no file when 0 findings -- create empty SARIF
