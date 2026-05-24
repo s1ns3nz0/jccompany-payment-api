@@ -21,6 +21,7 @@ env:
   JAVA_VERSION: '17'
   JAVA_DISTRIBUTION: 'temurin'
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  LOKI_URL: https://loki.miata.cloud
 
 jobs:
 
@@ -1235,8 +1236,6 @@ jobs:
 
       - name: Push DORA metrics to Loki (CA-7 / DORA Four Keys)
         if: always()
-        env:
-          LOKI_URL: https://loki.miata.cloud
         run: |
           # Extract all metrics safely (no eval)
           python3 -c "
@@ -1461,8 +1460,6 @@ jobs:
           PYEOF
 
       - name: Push OSCAL Assessment Results to Loki (CA-7 / AU-2)
-        env:
-          LOKI_URL: https://loki.miata.cloud
         run: |
           python3 << 'PYEOF'
           import json, os, time, urllib.request
@@ -1933,7 +1930,6 @@ jobs:
       - name: Push cosign verification to Loki (SI-7 / CA-7)
         if: always()
         env:
-          LOKI_URL: https://loki.miata.cloud
           IMAGE_DIGEST: ${{ needs.deliver.outputs.image-digest }}
           VERIFY_SIG: ${{ steps.cosign-sig.outcome }}
           VERIFY_ATT: ${{ steps.cosign-att.outcome }}
@@ -2276,8 +2272,6 @@ jobs:
           python-version: "3.12"
 
       - name: Run POA&M Registry Update
-        env:
-          LOKI_URL: https://loki.miata.cloud
         run: |
           echo "=== Available risk results ==="
           find ./risk-results/ -name '*.json' -type f | sort | head -30
@@ -2351,37 +2345,33 @@ jobs:
           path: ./risk-results/
           merge-multiple: false
 
-      - name: Download existing history from S3
-        run: |
-          aws s3 cp s3://jccompany-web/risk/data/history.json ./history.json 2>/dev/null || echo '[]' > ./history.json
-        continue-on-error: true
+      - name: Download BUILD/TEST/DEVELOP/DELIVER risk artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          pattern: "risk-assess-*"
+          path: ./risk-results/
+          merge-multiple: false
 
       - name: Setup Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
           python-version: "3.12"
 
-      - name: Generate Risk Dashboard
+      - name: Generate Risk Dashboard Data
         run: |
-          RESULT_FILE=$(find ./risk-results/ -name 'risk-release-result.json' -type f | head -1)
-          if [ -z "$RESULT_FILE" ]; then
-            echo "::warning::No risk-release-result.json found, skipping dashboard"
-            exit 0
-          fi
-          echo "Using: $RESULT_FILE"
+          echo "=== Available risk results ==="
+          find ./risk-results/ -name '*.json' -type f | sort | head -20
 
           python .github/scripts/risk-dashboard-gen.py \
-            --result "$RESULT_FILE" \
+            --results-dir ./risk-results \
             --output-dir ./risk-site \
             --commit "${{ github.sha }}" \
-            --run-id "${{ github.run_id }}" \
-            --history-json ./history.json
+            --run-id "${{ github.run_id }}"
 
-      - name: Push to S3 (CloudFront)
+      - name: Push data to S3 (CloudFront)
         run: |
-          if [ -d ./risk-site ]; then
-            aws s3 sync ./risk-site/ s3://jccompany-web/risk/ \
-              --delete \
+          if [ -d ./risk-site/data ]; then
+            aws s3 sync ./risk-site/data/ s3://jccompany-web/risk/data/ \
               --cache-control "max-age=60"
-            echo "Risk dashboard pushed to s3://jccompany-web/risk/"
+            echo "Risk dashboard data pushed to s3://jccompany-web/risk/data/"
           fi
