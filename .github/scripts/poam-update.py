@@ -400,6 +400,14 @@ def push_to_loki(registry, loki_url, commit, run_id, dry_run=False):
     # Stream 2: Individual OPEN findings
     open_items = [i for i in registry["items"] if i.get("status") in ("open", "OPEN")]
     for item in open_items:
+        lc = item.get("lifecycle", {})
+        sla_days = lc.get("sla_days", 90)
+        days_open = lc.get("days_open", 0)
+        sla_pct = round(days_open / sla_days * 100, 1) if sla_days > 0 else 0
+        ticket = item.get("ticket", {})
+        ra = item.get("risk_acceptance", {})
+        delay = item.get("delay", {})
+
         finding_line = json.dumps({
             "poam_id": item.get("id", ""),
             "finding_id": item.get("finding_id", ""),
@@ -409,9 +417,20 @@ def push_to_loki(registry, loki_url, commit, run_id, dry_run=False):
             "weakness": item.get("weakness", "")[:120],
             "package": item.get("weakness_detail", {}).get("package", ""),
             "cvss_score": item.get("weakness_detail", {}).get("cvss_score", 0),
-            "days_open": item.get("lifecycle", {}).get("days_open", 0),
-            "due_date": item.get("lifecycle", {}).get("due_date", ""),
-            "is_overdue": item.get("lifecycle", {}).get("is_overdue", False),
+            "supply_chain": item.get("weakness_detail", {}).get("supply_chain", False),
+            "days_open": days_open,
+            "sla_days": sla_days,
+            "sla_pct": sla_pct,
+            "due_date": lc.get("due_date", ""),
+            "is_overdue": lc.get("is_overdue", False),
+            "ticket_id": ticket.get("id", ""),
+            "ticket_url": ticket.get("url", ""),
+            "risk_accepted": bool(ra.get("accepted_by")),
+            "accepted_by": ra.get("accepted_by", ""),
+            "compensating_controls": ra.get("compensating_controls", ""),
+            "delay_justification": delay.get("justification", ""),
+            "remediation_plan": item.get("remediation", {}).get("plan", "")[:100],
+            "vendor_dependency": item.get("remediation", {}).get("vendor_dependency", ""),
             "fingerprint": item.get("fingerprint", ""),
         }, default=str)
 
