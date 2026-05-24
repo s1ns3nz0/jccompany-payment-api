@@ -1,13 +1,10 @@
 name: OpenSSF Scorecard
-
 on:
   push:
     branches: [main, master]
   schedule:
     - cron: "0 9 * * 1"  # Every Monday 9AM UTC
-
 permissions: read-all
-
 jobs:
   scorecard:
     name: Scorecard Analysis
@@ -20,17 +17,76 @@ jobs:
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
         with:
           persist-credentials: false
-
       - name: Run Scorecard
-        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a  # v2.4.1
+        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a  # v2.4.3
         with:
           results_file: scorecard-results.json
           results_format: json
           publish_results: true
-
       - name: Upload Scorecard results
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        if: always()
         with:
           name: scorecard-results
           path: scorecard-results.json
           retention-days: 90
+      - name: Push Scorecard to Loki (CA-7 / SR-3)
+        if: always()
+        env:
+          LOKI_URL: https://loki.miata.cloud
+        run: |
+          if [ ! -f scorecard-results.json ]; then
+            echo "::warning::Scorecard results not found"
+            exit 0
+          fi
+          # Extract overall score and per-check scores
+          python3 -c "
+          import json, urllib.request, time
+
+          with open('scorecard-results.json') as f:
+              data = json.load(f)
+
+          score = data.get('score', 0)
+          checks = []
+          for check in data.get('checks', []):
+              checks.append({
+                  'name': check.get('name', ''),
+                  'score': check.get('score', -1),
+                  'reason': check.get('reason', '')[:80]
+              })
+
+          passed = sum(1 for c in checks if c['score'] >= 7)
+          total = len(checks)
+
+          payload = {
+              'streams': [{
+                  'stream': {
+                      'job': 'openssf-scorecard',
+                      'product': 'payment-api'
+                  },
+                  'values': [[
+                      str(int(time.time())) + '000000000',
+                      json.dumps({
+                          'score': score,
+                          'passed': passed,
+                          'total': total,
+                          'checks': checks
+                      })
+                  ]]
+              }]
+          }
+
+          import os
+          loki_url = os.environ['LOKI_URL']
+          req = urllib.request.Request(
+              loki_url + '/loki/api/v1/push',
+              data=json.dumps(payload).encode(),
+              headers={'Content-Type': 'application/json'},
+              method='POST'
+          )
+          try:
+              urllib.request.urlopen(req)
+              print(f'Scorecard pushed to Loki: score={score} passed={passed}/{total}')
+          except Exception as e:
+              print(f'::warning::Loki push failed: {e}')
+          "
