@@ -4,7 +4,7 @@
   <parent>
     <groupId>org.springframework.boot</groupId>
     <artifactId>spring-boot-starter-parent</artifactId>
-    <version>3.2.5</version>
+    <version>3.5.14</version>
     <relativePath/>
   </parent>
   <groupId>com.jccompany</groupId>
@@ -14,7 +14,7 @@
   <description>JC Company Payment API - DevSecOps Portfolio</description>
   <properties>
     <java.version>17</java.version>
-    <cyclonedx.version>2.7.11</cyclonedx.version>
+    <cyclonedx.version>2.9.1</cyclonedx.version>
   </properties>
   <dependencies>
     <!-- Spring Boot Web -->
@@ -47,18 +47,18 @@
     <dependency>
       <groupId>io.jsonwebtoken</groupId>
       <artifactId>jjwt-api</artifactId>
-      <version>0.11.5</version>
+      <version>0.12.6</version>
     </dependency>
     <dependency>
       <groupId>io.jsonwebtoken</groupId>
       <artifactId>jjwt-impl</artifactId>
-      <version>0.11.5</version>
+      <version>0.12.6</version>
       <scope>runtime</scope>
     </dependency>
     <dependency>
       <groupId>io.jsonwebtoken</groupId>
       <artifactId>jjwt-jackson</artifactId>
-      <version>0.11.5</version>
+      <version>0.12.6</version>
       <scope>runtime</scope>
     </dependency>
     <!-- Actuator -->
@@ -117,7 +117,7 @@
       <plugin>
         <groupId>com.github.spotbugs</groupId>
         <artifactId>spotbugs-maven-plugin</artifactId>
-        <version>4.8.3.1</version>
+        <version>4.9.3.0</version>
         <dependencies>
           <dependency>
             <groupId>com.h3xstream.findsecbugs</groupId>
@@ -130,7 +130,7 @@
       <plugin>
         <groupId>org.jacoco</groupId>
         <artifactId>jacoco-maven-plugin</artifactId>
-        <version>0.8.11</version>
+        <version>0.8.13</version>
         <executions>
           <execution>
             <goals>
