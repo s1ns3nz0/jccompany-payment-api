@@ -1,474 +1,362 @@
 #!/usr/bin/env python3
 """
-Risk Assessment Dashboard Generator
-====================================
-Reads risk-release-result.json (or any phase) and generates a single-file
-HTML dashboard for risk.miata.cloud (CloudFront + S3).
+Risk Dashboard Data Generator
+==============================
+Reads all phase risk results and generates per-phase JSON for the React dashboard.
 
-Outputs:
-  - index.html      (interactive dashboard)
-  - data/latest.json (trimmed JSON for client-side rendering)
-  - data/history.json (manifest of past runs, appended each time)
+Output structure:
+  data/latest/{phase}.json      (latest commit data)
+  data/latest/manifest.json
+  data/latest/projects.json
+  data/{short-sha}/{phase}.json (commit-specific snapshot)
+  data/{short-sha}/manifest.json
+  data/{short-sha}/projects.json
 
 Usage:
   python risk-dashboard-gen.py \
-    --result risk-release-result.json \
+    --results-dir ./risk-results \
     --output-dir ./risk-site \
-    --commit abc1234 \
-    --run-id 12345
+    --commit abc1234def \
+    --run-id 26352376746
 """
 
 import argparse
 import json
 import os
+import re
 import sys
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Risk Dashboard Generator")
-    p.add_argument("--result", required=True, help="Path to risk-release-result.json")
+    p = argparse.ArgumentParser(description="Risk Dashboard Data Generator")
+    p.add_argument("--results-dir", required=True, help="Directory with risk result artifacts")
     p.add_argument("--output-dir", default="./risk-site", help="Output directory")
-    p.add_argument("--commit", default="unknown")
-    p.add_argument("--run-id", default="0")
-    p.add_argument("--history-json", default="", help="Path to existing history.json from S3")
+    p.add_argument("--commit", default="unknown", help="Git commit SHA")
+    p.add_argument("--run-id", default="0", help="GitHub Actions run ID")
     return p.parse_args()
 
 
-def load_result(path):
-    with open(path) as f:
-        return json.load(f)
+# ── Phase discovery ──
+
+PHASE_PATTERNS = [
+    ("DEVELOP", "risk-assess-develop-*/risk-develop-result.json"),
+    ("BUILD",   "risk-assess-build-*/risk-build-result.json"),
+    ("TEST",    "risk-assess-test-*/risk-test-result.json"),
+    ("RELEASE", "release-artifacts-*/risk-release-result.json"),
+    ("DELIVER", "risk-assess-deliver-*/risk-deliver-response.json"),
+]
 
 
-def build_latest_json(data, commit, run_id):
-    """Extract display-relevant data into a smaller JSON for the frontend."""
-    gate = data.get("gate", {})
-    fc = gate.get("findings_count", {})
-    auth = data.get("authorization", {})
-    sar = data.get("sar", {})
-    poam = data.get("poam", {})
-    sp = data.get("sp800_30_report", {})
+def discover_phases(results_dir):
+    """Find all phase result files."""
+    found = []
+    for phase_name, pattern in PHASE_PATTERNS:
+        import glob
+        matches = glob.glob(os.path.join(results_dir, pattern))
+        if matches:
+            try:
+                with open(matches[0]) as f:
+                    data = json.load(f)
+                # Skip error responses
+                if "detail" in data and len(data) <= 2:
+                    print(f"  [SKIP] {phase_name}: error response")
+                    continue
+                found.append((phase_name, data))
+                print(f"  [OK] {phase_name}: {os.path.basename(matches[0])}")
+            except Exception as e:
+                print(f"  [ERROR] {phase_name}: {e}")
+    return found
 
-    # Top POA&M items sorted by severity
-    severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "unknown": 4, "info": 5}
-    poam_items = sorted(
-        poam.get("items", []),
-        key=lambda x: (severity_order.get(x.get("severity", "unknown"), 9), -(x.get("weakness_detail", {}).get("cvss_score", 0) or 0))
-    )
 
-    # Trim poam items to essential display fields
-    display_items = []
-    for item in poam_items:
+# ── Supply chain analysis ──
+
+def norm_pkg(name):
+    """Normalize package name: strip maven group prefix."""
+    if ":" in name:
+        return name.split(":")[-1]
+    return name
+
+
+def build_sc_packages(poam_items):
+    """Build deduplicated supply chain package breakdown."""
+    sc_items = [i for i in poam_items if i.get("weakness_detail", {}).get("supply_chain")]
+    pkg_map = defaultdict(lambda: {"cves": set(), "severities": [], "cvss_max": 0, "epss_max": 0, "fix": ""})
+
+    for item in sc_items:
         wd = item.get("weakness_detail", {})
-        sd = item.get("source_detail", {})
-        lc = item.get("lifecycle", {})
-        display_items.append({
-            "id": item.get("id", ""),
-            "finding_id": item.get("finding_id", ""),
-            "weakness": item.get("weakness", "")[:120],
-            "severity": item.get("severity", "unknown"),
-            "source": item.get("source", ""),
-            "scan_type": sd.get("scan_type", ""),
-            "package": wd.get("package", ""),
-            "cvss": wd.get("cvss_score", 0),
-            "epss": wd.get("epss_score", 0),
-            "supply_chain": wd.get("supply_chain", False),
-            "due_date": lc.get("due_date", ""),
-            "sla_days": lc.get("sla_days", 0),
-            "phase": sd.get("phase", ""),
+        pkg = norm_pkg(wd.get("package", "unknown"))
+        cve = wd.get("cve_id", "")
+        if cve and cve in pkg_map[pkg]["cves"]:
+            continue
+        pkg_map[pkg]["cves"].add(cve or item.get("finding_id", ""))
+        pkg_map[pkg]["severities"].append(item.get("severity", ""))
+        cvss = wd.get("cvss_score", 0) or 0
+        epss = wd.get("epss_score", 0) or 0
+        if cvss > pkg_map[pkg]["cvss_max"]:
+            pkg_map[pkg]["cvss_max"] = cvss
+        if epss > pkg_map[pkg]["epss_max"]:
+            pkg_map[pkg]["epss_max"] = epss
+        plan = item.get("remediation", {}).get("plan", "")
+        m = re.search(r"to (\d+\.\S+)", plan)
+        if m and not pkg_map[pkg]["fix"]:
+            pkg_map[pkg]["fix"] = m.group(1).rstrip(".")
+
+    sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    packages = []
+    for pkg, info in pkg_map.items():
+        sev = Counter(info["severities"])
+        worst = min(sev.keys(), key=lambda s: sev_order.get(s, 9)) if sev else "unknown"
+        packages.append({
+            "package": pkg, "cve_count": len(info["cves"]),
+            "critical": sev.get("critical", 0), "high": sev.get("high", 0),
+            "medium": sev.get("medium", 0), "low": sev.get("low", 0),
+            "cvss_max": info["cvss_max"], "epss_max": round(info["epss_max"], 4),
+            "fix": info["fix"], "worst": worst,
+        })
+    packages.sort(key=lambda x: (sev_order.get(x["worst"], 9), -x["cvss_max"]))
+    return packages
+
+
+# ── Phase data trimming ──
+
+def trim_phase(raw, phase_name, commit, run_id):
+    """Convert raw risk platform response to trimmed display JSON."""
+    sp = raw.get("sp800_30_report", {})
+    poam = raw.get("poam", {}).get("items", [])
+
+    # Threat sources
+    ts_all = [
+        {"id": t["id"], "type": t["type"], "name": t["name"],
+         "capability": t.get("capability", ""), "intent": t.get("intent", ""),
+         "targeting": t.get("targeting", "")}
+        for t in sp.get("threat_sources", [])
+    ]
+
+    # Supply chain map from poam
+    sc_map = {}
+    for item in poam:
+        fid = item.get("finding_id", "")
+        sc_map[fid] = item.get("weakness_detail", {}).get("supply_chain", False)
+
+    # Risk chain
+    tes = sp.get("threat_events", [])
+    tss = sp.get("threat_sources", [])
+    las = sp.get("likelihood_assessments", [])
+    ias = sp.get("impact_assessments", [])
+    rds = sp.get("risk_determinations", [])
+    rrs = sp.get("risk_responses", [])
+
+    chain = []
+    for i in range(len(tes)):
+        te = tes[i] if i < len(tes) else {}
+        ts = tss[i] if i < len(tss) else {}
+        la = las[i] if i < len(las) else {}
+        ia = ias[i] if i < len(ias) else {}
+        rd = rds[i] if i < len(rds) else {}
+        rr = rrs[i] if i < len(rrs) else {}
+        cve = te.get("cve_id", "")
+
+        chain.append({
+            "ts_id": ts.get("id", ""), "ts_type": ts.get("type", ""),
+            "ts_name": ts.get("name", ""), "ts_capability": ts.get("capability", ""),
+            "te_id": te.get("id", ""), "te_desc": te.get("description", "")[:100],
+            "te_cve": cve, "te_mitre": te.get("mitre_technique", ""),
+            "te_target": te.get("target_component", ""),
+            "te_relevance": te.get("relevance", ""),
+            "l_init": la.get("initiation_likelihood", ""),
+            "l_impact": la.get("impact_likelihood", ""),
+            "l_overall": la.get("overall_likelihood", ""),
+            "l_predisposing": la.get("predisposing_conditions", [])[:2],
+            "l_evidence": (la.get("evidence", "") or "")[:60],
+            "i_type": ia.get("impact_type", ""),
+            "i_severity": ia.get("severity", ""),
+            "i_cia": ia.get("cia_impact", {}),
+            "i_compliance": ia.get("compliance_impact", [])[:3],
+            "i_compliance_count": len(ia.get("compliance_impact", [])),
+            "i_business": ia.get("business_impact", ""),
+            "r_level": rd.get("risk_level", ""),
+            "r_score": rd.get("risk_score", 0),
+            "resp_type": rr.get("response_type", ""),
+            "resp_desc": (rr.get("description", "") or "")[:80],
+            "resp_milestones": rr.get("milestones", [])[:2],
+            "supply_chain": sc_map.get(cve, False) if cve else False,
         })
 
-    # SAR control assessments summary
-    ca = sar.get("control_assessments", [])
-    controls_by_status = {}
-    for c in ca:
-        st = c.get("status", "unknown")
-        controls_by_status.setdefault(st, []).append({
-            "id": c.get("control_id", ""),
-            "title": c.get("title", "")[:80],
-            "assessor": c.get("assessor", ""),
-            "findings": c.get("findings_count", 0),
-        })
+    # MITRE / scanner counts
+    mitre_counts = Counter(c["te_mitre"] for c in chain if c["te_mitre"])
+    scanner_counts = Counter(i.get("source", "") for i in poam)
+    sc_total = sum(1 for i in poam if i.get("weakness_detail", {}).get("supply_chain"))
 
-    # Scanner distribution
-    scanner_counts = {}
-    for item in poam.get("items", []):
-        s = item.get("source", "unknown")
-        scanner_counts[s] = scanner_counts.get(s, 0) + 1
+    # Supply chain packages
+    sc_packages = build_sc_packages(poam)
 
-    # Threshold results
-    thresholds = gate.get("threshold_results", [])
+    # Gate info
+    fc = raw.get("gate", {}).get("findings_count", {})
 
     return {
+        "phase": phase_name,
         "meta": {
-            "assessment_id": data.get("assessment_id", ""),
-            "product": data.get("product", ""),
-            "mode": data.get("mode", ""),
-            "created_at": data.get("created_at", ""),
-            "duration_seconds": data.get("duration_seconds", 0),
+            "assessment_id": raw.get("assessment_id", ""),
+            "product": raw.get("product", ""),
+            "mode": raw.get("mode", ""),
+            "created_at": raw.get("created_at", ""),
+            "duration_seconds": raw.get("duration_seconds", 0),
             "commit": commit,
             "run_id": run_id,
         },
         "decision": {
-            "authorization": auth.get("decision", "UNKNOWN"),
-            "risk_level": auth.get("risk_level", "unknown"),
-            "reasoning": auth.get("reasoning", ""),
-            "valid_until": auth.get("valid_until", ""),
+            "authorization": raw.get("authorization", {}).get("decision", "UNKNOWN"),
+            "risk_level": raw.get("authorization", {}).get("risk_level", "unknown"),
+            "reasoning": raw.get("authorization", {}).get("reasoning", ""),
+            "valid_until": raw.get("authorization", {}).get("valid_until", ""),
         },
         "findings": {
-            "total": data.get("findings_count", 0),
-            "critical": fc.get("critical", 0),
-            "high": fc.get("high", 0),
-            "medium": fc.get("medium", 0),
-            "low": fc.get("low", 0),
+            "total": raw.get("findings_count", 0),
+            "critical": fc.get("critical", 0), "high": fc.get("high", 0),
+            "medium": fc.get("medium", 0), "low": fc.get("low", 0),
         },
-        "thresholds": thresholds,
+        "thresholds": raw.get("gate", {}).get("threshold_results", []),
         "sar": {
-            "total": sar.get("total_controls", 0),
-            "satisfied": sar.get("satisfied", 0),
-            "other": sar.get("other_than_satisfied", 0),
-            "not_assessed": sar.get("not_assessed", 0),
-            "controls_by_status": controls_by_status,
+            "total": raw.get("sar", {}).get("total_controls", 0),
+            "satisfied": raw.get("sar", {}).get("satisfied", 0),
+            "other": raw.get("sar", {}).get("other_than_satisfied", 0),
+            "not_assessed": raw.get("sar", {}).get("not_assessed", 0),
+            "assessments": raw.get("sar", {}).get("control_assessments", []),
         },
-        "cia": data.get("sp800_30_report", {}).get("cia_impact_levels", {}),
-        "scanner_counts": scanner_counts,
-        "recommendations": sp.get("recommendations", [])[:5],
-        "executive_summary": sp.get("executive_summary", ""),
-        "poam_items": display_items,
+        "sp800_30": {
+            "scope": sp.get("scope", ""),
+            "methodology": sp.get("methodology", ""),
+            "risk_model": sp.get("risk_model", ""),
+            "executive_summary": sp.get("executive_summary", ""),
+            "assumptions": sp.get("assumptions", []),
+            "cia_impact": sp.get("cia_impact_levels", {}),
+            "recommendations": sp.get("recommendations", []),
+            "reassessment_triggers": sp.get("reassessment_triggers", []),
+            "next_review_date": sp.get("next_review_date", ""),
+        },
+        "threat_sources": ts_all,
+        "risk_chain": chain,
+        "sc_packages": sc_packages,
+        "sc_packages_total": len(sc_packages),
+        "supply_chain_total": sc_total,
+        "supply_chain_pct": round(sc_total / len(poam) * 100, 1) if poam else 0,
+        "supply_chain_packages": len(sc_packages),
+        "supply_chain_with_fix": sum(1 for p in sc_packages if p.get("fix")),
+        "supply_chain_without_fix": sum(1 for p in sc_packages if not p.get("fix")),
+        "mitre_techniques": dict(mitre_counts),
+        "scanner_counts": dict(scanner_counts),
     }
 
 
-def update_history(history_path, latest, commit, run_id):
-    """Append current run to history manifest."""
-    history = []
-    if history_path and os.path.exists(history_path):
-        try:
-            with open(history_path) as f:
-                history = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            history = []
-
-    entry = {
-        "assessment_id": latest["meta"]["assessment_id"],
-        "created_at": latest["meta"]["created_at"],
-        "commit": commit[:7],
-        "run_id": run_id,
-        "decision": latest["decision"]["authorization"],
-        "findings": latest["findings"]["total"],
-        "critical": latest["findings"]["critical"],
-        "sar_satisfied": latest["sar"]["satisfied"],
-        "sar_total": latest["sar"]["total"],
-    }
-
-    history.insert(0, entry)
-    history = history[:20]  # Keep last 20 runs
-    return history
-
-
-def generate_html(latest_json):
-    """Generate single-file HTML dashboard with embedded data."""
-    data_json = json.dumps(latest_json, default=str)
-
-    return f'''<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Risk Assessment — {latest_json["meta"]["product"]}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
-*{{margin:0;padding:0;box-sizing:border-box}}
-:root{{
-  --bg:#0a0e17;--surface:#111827;--surface2:#1a2332;--border:#1e2d3d;
-  --text:#e2e8f0;--text2:#94a3b8;--text3:#64748b;
-  --critical:#ef4444;--high:#f97316;--medium:#eab308;--low:#3b82f6;
-  --green:#22c55e;--red:#ef4444;--accent:#6366f1;
-}}
-body{{font-family:'Plus Jakarta Sans',sans-serif;background:var(--bg);color:var(--text);line-height:1.6;min-height:100vh}}
-.mono{{font-family:'JetBrains Mono',monospace}}
-
-/* Layout */
-.container{{max-width:1200px;margin:0 auto;padding:20px}}
-.grid{{display:grid;gap:16px}}
-.grid-4{{grid-template-columns:repeat(4,1fr)}}
-.grid-3{{grid-template-columns:repeat(3,1fr)}}
-.grid-2{{grid-template-columns:1fr 1fr}}
-@media(max-width:768px){{.grid-4,.grid-3,.grid-2{{grid-template-columns:1fr}}}}
-
-/* Header */
-.header{{display:flex;justify-content:space-between;align-items:center;padding:24px 0;border-bottom:1px solid var(--border);margin-bottom:24px}}
-.header h1{{font-size:20px;font-weight:700}}
-.header h1 span{{color:var(--text3);font-weight:400}}
-.badge{{display:inline-flex;align-items:center;gap:6px;padding:6px 16px;border-radius:6px;font-weight:700;font-size:14px;letter-spacing:1px}}
-.badge-ato{{background:#052e16;color:#22c55e;border:1px solid #166534}}
-.badge-dato{{background:#2d0a0a;color:#ef4444;border:1px solid #7f1d1d}}
-
-/* Cards */
-.card{{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px}}
-.card-title{{font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text3);margin-bottom:8px}}
-.card-value{{font-size:32px;font-weight:700}}
-.card-sub{{font-size:12px;color:var(--text2);margin-top:4px}}
-
-/* Severity colors */
-.sev-critical{{color:var(--critical)}}.sev-high{{color:var(--high)}}
-.sev-medium{{color:var(--medium)}}.sev-low{{color:var(--low)}}
-
-/* Bar chart */
-.bar-row{{display:flex;align-items:center;gap:12px;margin-bottom:10px}}
-.bar-label{{width:70px;font-size:12px;color:var(--text2);text-align:right;text-transform:uppercase;font-weight:600}}
-.bar-track{{flex:1;height:28px;background:var(--surface2);border-radius:4px;overflow:hidden;position:relative}}
-.bar-fill{{height:100%;border-radius:4px;display:flex;align-items:center;padding-left:10px;font-size:12px;font-weight:600;min-width:30px;transition:width .6s ease}}
-.bar-fill.critical{{background:var(--critical)}}.bar-fill.high{{background:var(--high)}}
-.bar-fill.medium{{background:var(--medium)}}.bar-fill.low{{background:var(--low)}}
-
-/* Progress ring */
-.progress-container{{display:flex;align-items:center;gap:20px}}
-.progress-ring{{position:relative;width:100px;height:100px}}
-.progress-ring svg{{transform:rotate(-90deg)}}
-.progress-ring .value{{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:700}}
-
-/* Table */
-.table-wrap{{overflow-x:auto;margin-top:12px}}
-table{{width:100%;border-collapse:collapse;font-size:13px}}
-th{{text-align:left;padding:10px 12px;border-bottom:2px solid var(--border);color:var(--text3);font-size:11px;text-transform:uppercase;letter-spacing:1px;font-weight:600}}
-td{{padding:10px 12px;border-bottom:1px solid var(--border)}}
-tr:hover{{background:var(--surface2)}}
-.pill{{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;text-transform:uppercase}}
-.pill-critical{{background:#2d0a0a;color:var(--critical)}}.pill-high{{background:#2d1a0a;color:var(--high)}}
-.pill-medium{{background:#2d2a0a;color:var(--medium)}}.pill-low{{background:#0a1a2d;color:var(--low)}}
-
-/* Sections */
-.section{{margin-bottom:24px}}
-.section-title{{font-size:14px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px}}
-.section-title .icon{{width:20px;height:20px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:12px}}
-
-/* Meta */
-.meta-grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}}
-.meta-item{{padding:8px 12px;background:var(--surface2);border-radius:4px}}
-.meta-item .label{{font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:1px}}
-.meta-item .val{{font-size:13px;margin-top:2px}}
-
-/* Gate thresholds */
-.threshold{{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px}}
-.threshold .dot{{width:8px;height:8px;border-radius:50%}}
-.dot-pass{{background:var(--green)}}.dot-fail{{background:var(--red)}}
-
-/* Tabs */
-.tabs{{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:16px}}
-.tab{{padding:8px 16px;cursor:pointer;font-size:13px;color:var(--text3);border-bottom:2px solid transparent;transition:all .2s}}
-.tab.active{{color:var(--text);border-bottom-color:var(--accent)}}
-.tab-content{{display:none}}.tab-content.active{{display:block}}
-
-/* Exec summary */
-.exec-summary{{padding:16px;background:var(--surface2);border-radius:6px;font-size:13px;line-height:1.8;color:var(--text2);border-left:3px solid var(--accent)}}
-
-/* Footer */
-.footer{{margin-top:32px;padding:16px 0;border-top:1px solid var(--border);font-size:11px;color:var(--text3);text-align:center}}
-</style>
-</head>
-<body>
-<div class="container" id="app"></div>
-<script>
-const DATA = {data_json};
-
-function render() {{
-  const d = DATA;
-  const isATO = d.decision.authorization === 'ATO';
-  const badgeClass = isATO ? 'badge-ato' : 'badge-dato';
-  const sarPct = d.sar.total > 0 ? Math.round(d.sar.satisfied / d.sar.total * 100) : 0;
-  const maxFinding = Math.max(d.findings.critical, d.findings.high, d.findings.medium, d.findings.low, 1);
-  const ts = d.meta.created_at ? new Date(d.meta.created_at).toLocaleString() : '-';
-
-  document.getElementById('app').innerHTML = `
-    <div class="header">
-      <h1>Risk Assessment <span>// ${{d.meta.product}}</span></h1>
-      <span class="badge ${{badgeClass}}">
-        ${{isATO ? '&#x2713;' : '&#x2717;'}} ${{d.decision.authorization}}
-      </span>
-    </div>
-
-    <!-- Meta -->
-    <div class="section">
-      <div class="meta-grid">
-        <div class="meta-item"><div class="label">Assessment ID</div><div class="val mono">${{d.meta.assessment_id}}</div></div>
-        <div class="meta-item"><div class="label">Timestamp</div><div class="val">${{ts}}</div></div>
-        <div class="meta-item"><div class="label">Commit</div><div class="val mono">${{d.meta.commit.slice(0,7)}}</div></div>
-        <div class="meta-item"><div class="label">Mode</div><div class="val">${{d.meta.mode}}</div></div>
-        <div class="meta-item"><div class="label">Risk Level</div><div class="val" style="color:${{d.decision.risk_level==='unacceptable'?'var(--critical)':'var(--medium)'}}">${{d.decision.risk_level}}</div></div>
-        <div class="meta-item"><div class="label">Duration</div><div class="val">${{d.meta.duration_seconds}}s</div></div>
-        <div class="meta-item"><div class="label">Run ID</div><div class="val mono">${{d.meta.run_id}}</div></div>
-        <div class="meta-item"><div class="label">Valid Until</div><div class="val">${{d.decision.valid_until || '-'}}</div></div>
-      </div>
-    </div>
-
-    <!-- Stats -->
-    <div class="grid grid-4 section">
-      <div class="card"><div class="card-title">Total Findings</div><div class="card-value">${{d.findings.total}}</div></div>
-      <div class="card"><div class="card-title">Critical + High</div><div class="card-value sev-critical">${{d.findings.critical + d.findings.high}}</div><div class="card-sub">C=${{d.findings.critical}} H=${{d.findings.high}}</div></div>
-      <div class="card"><div class="card-title">SAR Coverage</div>
-        <div class="progress-container">
-          <div class="progress-ring">
-            <svg width="100" height="100"><circle cx="50" cy="50" r="42" fill="none" stroke="var(--surface2)" stroke-width="8"/>
-            <circle cx="50" cy="50" r="42" fill="none" stroke="${{sarPct>=80?'var(--green)':sarPct>=50?'var(--medium)':'var(--critical)'}}" stroke-width="8" stroke-dasharray="${{sarPct*2.64}} 264" stroke-linecap="round"/></svg>
-            <div class="value">${{sarPct}}%</div>
-          </div>
-          <div><div style="font-size:13px;color:var(--text2)">${{d.sar.satisfied}} / ${{d.sar.total}}</div></div>
-        </div>
-      </div>
-      <div class="card"><div class="card-title">CIA Impact</div>
-        <div style="font-size:14px;margin-top:8px">
-          <div>C: <span style="color:var(--${{d.cia.confidentiality==='high'?'critical':'medium'}})">&#9646; ${{d.cia.confidentiality||'-'}}</span></div>
-          <div>I: <span style="color:var(--${{d.cia.integrity==='high'?'critical':'medium'}})">&#9646; ${{d.cia.integrity||'-'}}</span></div>
-          <div>A: <span style="color:var(--${{d.cia.availability==='high'?'critical':'medium'}})">&#9646; ${{d.cia.availability||'-'}}</span></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Executive Summary -->
-    <div class="section">
-      <div class="section-title">Executive Summary (SP 800-30)</div>
-      <div class="exec-summary">${{d.executive_summary||'No summary available.'}}</div>
-    </div>
-
-    <!-- Findings Breakdown -->
-    <div class="grid grid-2 section">
-      <div class="card">
-        <div class="card-title">Findings by Severity</div>
-        <div style="margin-top:12px">
-          ${{['critical','high','medium','low'].map(s => `
-            <div class="bar-row">
-              <div class="bar-label">${{s}}</div>
-              <div class="bar-track"><div class="bar-fill ${{s}}" style="width:${{Math.max(d.findings[s]/maxFinding*100,2)}}%">${{d.findings[s]}}</div></div>
-            </div>`).join('')}}
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-title">Gate Thresholds</div>
-        <div style="margin-top:8px">
-          ${{d.thresholds.map(t => `
-            <div class="threshold">
-              <div class="dot ${{t.passed?'dot-pass':'dot-fail'}}"></div>
-              <span style="flex:1">${{t.name}}</span>
-              <span class="mono" style="color:${{t.passed?'var(--green)':'var(--critical)'}}">${{t.actual}}/${{t.limit}}</span>
-            </div>`).join('')}}
-        </div>
-        <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;color:var(--text3)">
-          ${{d.decision.reasoning}}
-        </div>
-      </div>
-    </div>
-
-    <!-- Findings by Scanner -->
-    <div class="section">
-      <div class="card">
-        <div class="card-title">Findings by Scanner</div>
-        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:12px">
-          ${{Object.entries(d.scanner_counts).sort((a,b)=>b[1]-a[1]).map(([s,c])=>`
-            <div style="padding:8px 16px;background:var(--surface2);border-radius:6px;text-align:center">
-              <div style="font-size:20px;font-weight:700">${{c}}</div>
-              <div style="font-size:11px;color:var(--text3);text-transform:uppercase">${{s}}</div>
-            </div>`).join('')}}
-        </div>
-      </div>
-    </div>
-
-    <!-- Tabs: POA&M / SAR -->
-    <div class="section">
-      <div class="tabs">
-        <div class="tab active" onclick="switchTab(this,'tab-poam')">POA&M Items (${{d.poam_items.length}})</div>
-        <div class="tab" onclick="switchTab(this,'tab-sar')">SAR Controls (${{d.sar.total}})</div>
-      </div>
-
-      <div class="tab-content active" id="tab-poam">
-        <div class="table-wrap"><table>
-          <tr><th>Severity</th><th>Finding</th><th>Scanner</th><th>Package</th><th>CVSS</th><th>EPSS</th><th>SLA</th></tr>
-          ${{d.poam_items.slice(0,80).map(i => `<tr>
-            <td><span class="pill pill-${{i.severity}}">${{i.severity}}</span></td>
-            <td class="mono" style="font-size:12px">${{i.finding_id}}</td>
-            <td>${{i.source}}</td>
-            <td style="color:var(--text2)">${{i.package||'-'}}</td>
-            <td class="mono">${{i.cvss||'-'}}</td>
-            <td class="mono">${{i.epss?i.epss.toFixed(3):'-'}}</td>
-            <td style="color:var(--text3)">${{i.sla_days}}d</td>
-          </tr>`).join('')}}
-        </table></div>
-        ${{d.poam_items.length>80?`<div style="text-align:center;padding:12px;color:var(--text3);font-size:12px">Showing 80 of ${{d.poam_items.length}} items</div>`:''}}
-      </div>
-
-      <div class="tab-content" id="tab-sar">
-        <div class="grid grid-3" style="margin-bottom:16px">
-          <div class="card" style="border-left:3px solid var(--green)"><div class="card-title">Satisfied</div><div class="card-value" style="color:var(--green)">${{d.sar.satisfied}}</div></div>
-          <div class="card" style="border-left:3px solid var(--critical)"><div class="card-title">Other than Satisfied</div><div class="card-value" style="color:var(--critical)">${{d.sar.other}}</div></div>
-          <div class="card" style="border-left:3px solid var(--text3)"><div class="card-title">Not Assessed</div><div class="card-value" style="color:var(--text3)">${{d.sar.not_assessed}}</div></div>
-        </div>
-        <div class="table-wrap"><table>
-          <tr><th>Status</th><th>Control</th><th>Title</th><th>Assessor</th><th>Findings</th></tr>
-          ${{Object.entries(d.sar.controls_by_status).flatMap(([status, ctrls]) =>
-            ctrls.slice(0,30).map(c => `<tr>
-              <td><span class="pill pill-${{status==='satisfied'?'low':status==='other_than_satisfied'?'critical':'medium'}}">${{status.replace(/_/g,' ')}}</span></td>
-              <td class="mono">${{c.id}}</td>
-              <td style="color:var(--text2);font-size:12px">${{c.title}}</td>
-              <td>${{c.assessor}}</td>
-              <td class="mono">${{c.findings}}</td>
-            </tr>`)).join('')}}
-        </table></div>
-      </div>
-    </div>
-
-    <div class="footer">
-      NIST SP 800-30 Rev 1 | SP 800-37 RMF | DoD DevSecOps Guidebook v2.5 | SSDF SP 800-218 | SP 800-204D<br>
-      Generated ${{new Date().toISOString()}} | Assessment ${{d.meta.assessment_id}}
-    </div>
-  `;
-}}
-
-function switchTab(el, id) {{
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-  el.classList.add('active');
-  document.getElementById(id).classList.add('active');
-}}
-
-render();
-</script>
-</body>
-</html>'''
-
+# ── Main ──
 
 def main():
     args = parse_args()
+    short_sha = args.commit[:7] if len(args.commit) >= 7 else args.commit
+    now = datetime.now(timezone.utc).isoformat()
 
-    print(f"[INFO] Loading result: {args.result}")
-    data = load_result(args.result)
+    print(f"[INFO] Risk Dashboard Gen: commit={short_sha} run={args.run_id}")
+    print(f"[INFO] Results dir: {args.results_dir}")
 
-    print(f"[INFO] Building dashboard data...")
-    latest = build_latest_json(data, args.commit, args.run_id)
+    # Discover phases
+    phases = discover_phases(args.results_dir)
+    if not phases:
+        print("[ERROR] No phase results found")
+        sys.exit(1)
 
-    # Create output directory
-    out = Path(args.output_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "data").mkdir(exist_ok=True)
+    # Process each phase
+    manifest_phases = []
+    phase_data = {}
+    primary_decision = "UNKNOWN"
 
-    # Write latest.json
-    with open(out / "data" / "latest.json", "w") as f:
-        json.dump(latest, f, indent=2, default=str)
-    print(f"[OK] data/latest.json ({len(latest['poam_items'])} items)")
+    for phase_name, raw in phases:
+        trimmed = trim_phase(raw, phase_name, args.commit, args.run_id)
+        phase_data[phase_name] = trimmed
+        manifest_phases.append({
+            "phase": phase_name,
+            "findings": trimmed["findings"]["total"],
+            "decision": trimmed["decision"]["authorization"],
+        })
+        # Use RELEASE decision as primary, fallback to last phase
+        if phase_name == "RELEASE":
+            primary_decision = trimmed["decision"]["authorization"]
+        print(f"  {phase_name}: {trimmed['findings']['total']} findings, "
+              f"{trimmed['decision']['authorization']}, "
+              f"{len(trimmed['risk_chain'])} risk chain, "
+              f"{len(trimmed.get('sc_packages', []))} SC packages")
 
-    # Update history
-    history = update_history(args.history_json, latest, args.commit, args.run_id)
-    with open(out / "data" / "history.json", "w") as f:
-        json.dump(history, f, indent=2, default=str)
-    print(f"[OK] data/history.json ({len(history)} runs)")
+    if primary_decision == "UNKNOWN" and phase_data:
+        last = list(phase_data.values())[-1]
+        primary_decision = last["decision"]["authorization"]
 
-    # Generate HTML
-    html = generate_html(latest)
-    with open(out / "index.html", "w") as f:
-        f.write(html)
-    print(f"[OK] index.html ({len(html)} bytes)")
+    # Build manifest
+    manifest = {
+        "phases": manifest_phases,
+        "generated_at": now,
+        "commit": args.commit,
+        "run_id": args.run_id,
+    }
 
-    print(f"[INFO] Output directory: {out}")
+    # Build projects.json
+    release = phase_data.get("RELEASE", list(phase_data.values())[-1])
+    projects = {
+        "projects": [{
+            "id": release["meta"]["product"],
+            "name": release["meta"]["product"].replace("-", " ").title(),
+            "description": f"JCCompany {release['meta']['product']} — PCI-DSS Scoped",
+            "latest_commit": short_sha,
+            "latest_date": now,
+            "decision": primary_decision,
+            "risk_level": release["decision"]["risk_level"],
+            "findings": release["findings"],
+            "scanners": list(release.get("scanner_counts", {}).keys()),
+            "phases": len(manifest_phases),
+            "framework": "NIST SP 800-30 / SP 800-37 RMF",
+        }],
+    }
+
+    # Write outputs: latest/ + {commit}/
+    for dest_dir in [
+        os.path.join(args.output_dir, "data", "latest"),
+        os.path.join(args.output_dir, "data", short_sha),
+    ]:
+        os.makedirs(dest_dir, exist_ok=True)
+
+        # Phase JSONs
+        for phase_name, data in phase_data.items():
+            path = os.path.join(dest_dir, f"{phase_name.lower()}.json")
+            with open(path, "w") as f:
+                json.dump(data, f, separators=(",", ":"), default=str)
+
+        # Manifest
+        with open(os.path.join(dest_dir, "manifest.json"), "w") as f:
+            json.dump(manifest, f, separators=(",", ":"), default=str)
+
+    # projects.json at data/ root + inside latest/ and commit/
+    for pj_dir in [
+        os.path.join(args.output_dir, "data"),
+        os.path.join(args.output_dir, "data", "latest"),
+        os.path.join(args.output_dir, "data", short_sha),
+    ]:
+        os.makedirs(pj_dir, exist_ok=True)
+        with open(os.path.join(pj_dir, "projects.json"), "w") as f:
+            json.dump(projects, f, separators=(",", ":"), default=str)
+
+    # Summary
+    total_size = 0
+    file_count = 0
+    for root, _, files in os.walk(os.path.join(args.output_dir, "data")):
+        for fn in files:
+            fp = os.path.join(root, fn)
+            total_size += os.path.getsize(fp)
+            file_count += 1
+
+    print(f"\n[OK] Generated {file_count} files ({total_size // 1024}KB total)")
+    print(f"[OK] Output: {args.output_dir}/data/latest/ + {args.output_dir}/data/{short_sha}/")
+    print(f"[INFO] Risk Dashboard gen complete")
 
 
 if __name__ == "__main__":
