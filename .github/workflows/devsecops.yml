@@ -133,10 +133,10 @@ jobs:
 
       - name: Validate SBOM quality (SP 800-204D S5.1.1 / SR-3)
         run: |
-          test -f target/payment-api-sbom.json || (echo "SBOM missing!" && exit 1)
+          test -f target/payment-api-1.0.0-SNAPSHOT-cyclonedx.json || (echo "SBOM missing!" && exit 1)
           python3 -c "
           import json
-          with open('target/payment-api-sbom.json') as f:
+          with open('target/payment-api-1.0.0-SNAPSHOT-cyclonedx.json') as f:
               bom = json.load(f)
           assert bom.get('serialNumber'), 'serialNumber missing (NTIA)'
           assert bom.get('metadata', {}).get('component'), 'metadata.component missing (NTIA)'
@@ -175,8 +175,8 @@ jobs:
         with:
           name: sbom-${{ steps.meta.outputs.git-sha }}
           path: |
-            target/payment-api-sbom.json
-            target/payment-api-sbom.xml
+            target/payment-api-1.0.0-SNAPSHOT-cyclonedx.json
+            target/payment-api-1.0.0-SNAPSHOT-cyclonedx.xml
           retention-days: 90
 
       - name: Upload SBOM to Dependency-Track (RA-5, SR-3 / SSDF RV.1.1)
@@ -196,7 +196,7 @@ jobs:
               -F "autoCreate=true" \
               -F "projectName=payment-api" \
               -F "projectVersion=latest" \
-              -F "bom=@target/payment-api-sbom.json;type=application/json" \
+              -F "bom=@target/payment-api-1.0.0-SNAPSHOT-cyclonedx.json;type=application/json" \
               -o /dev/null -w "%{http_code}" 2>/dev/null) || HTTP="000"
             echo "D-Track upload attempt ${attempt}: HTTP ${HTTP}"
             [ "$HTTP" = "200" ] || [ "$HTTP" = "201" ] && break
@@ -372,7 +372,7 @@ jobs:
             https://github.com/anchore/grype/releases/download/v0.112.0/grype_0.112.0_linux_amd64.tar.gz
           echo "acb14a030010fe9bdb9594b4ae108d9d14ef2f926d936aa0916dc62c89c058ea  /tmp/grype.tar.gz" | sha256sum -c
           tar xzf /tmp/grype.tar.gz -C /usr/local/bin grype
-          grype sbom:target/payment-api-sbom.json -o json > results.json 2>/dev/null || echo '{"matches":[]}' > results.json
+          grype sbom:target/payment-api-1.0.0-SNAPSHOT-cyclonedx.json -o json > results.json 2>/dev/null || echo '{"matches":[]}' > results.json
           MATCHES=$(jq '.matches | length' results.json 2>/dev/null || echo 0)
           echo "Grype SBOM: ${MATCHES} CVE matches found"
           echo "grype-matches=${MATCHES}" >> $GITHUB_OUTPUT
@@ -1168,7 +1168,7 @@ jobs:
 
       - name: SBOM SCA at Release (DoD Guidebook Table 8 REQUIRED / RA-5, SR-3)
         run: |
-          grype sbom:target/payment-api-sbom.json -o json > release-sca-results.json 2>/dev/null || echo '{"matches":[]}' > release-sca-results.json
+          grype sbom:target/payment-api-1.0.0-SNAPSHOT-cyclonedx.json -o json > release-sca-results.json 2>/dev/null || echo '{"matches":[]}' > release-sca-results.json
           MATCHES=$(jq '.matches | length' release-sca-results.json 2>/dev/null || echo 0)
           echo "Release SBOM SCA: ${MATCHES} CVE matches"
         continue-on-error: true
@@ -1186,7 +1186,7 @@ jobs:
           path: |
             target/*.jar
             target/checksums.sha256
-            target/payment-api-sbom.json
+            target/payment-api-1.0.0-SNAPSHOT-cyclonedx.json
             risk-release-result.json
           retention-days: 90
 
@@ -1714,7 +1714,7 @@ jobs:
       - name: SBOM Attestation (SP 800-204D S5.1.1 / SR-3, SA-10)
         run: |
           IMAGE_URI="${{ secrets.ECR_REGISTRY }}/jccompany/payment-api@${{ steps.push.outputs.image-digest }}"
-          SBOM_PATH="target/payment-api-sbom.json"
+          SBOM_PATH="target/payment-api-1.0.0-SNAPSHOT-cyclonedx.json"
           if [ ! -f "$SBOM_PATH" ]; then
             echo "::error::SBOM not found at $SBOM_PATH"
             exit 1
@@ -1760,7 +1760,7 @@ jobs:
       - name: Upload SBOM to S3 (SSDF PS.3.2 / AU-9)
         if: always()
         run: |
-          aws s3 cp target/payment-api-sbom.json \
+          aws s3 cp target/payment-api-1.0.0-SNAPSHOT-cyclonedx.json \
             s3://${{ secrets.S3_EVIDENCE_BUCKET }}/sbom/${{ github.sha }}/payment-api-sbom.json
 
       - name: Risk Assessment -- DELIVER (RA-3, CA-7 / SP 800-30)
@@ -2050,7 +2050,7 @@ jobs:
 
       - name: SBOM SCA at DEPLOY (DoD Table 10 REQUIRED / RA-5, SR-3)
         run: |
-          grype sbom:target/payment-api-sbom.json -o json > deploy-sca-results.json 2>/dev/null || echo '{"matches":[]}' > deploy-sca-results.json
+          grype sbom:target/payment-api-1.0.0-SNAPSHOT-cyclonedx.json -o json > deploy-sca-results.json 2>/dev/null || echo '{"matches":[]}' > deploy-sca-results.json
           MATCHES=$(jq '.matches | length' deploy-sca-results.json 2>/dev/null || echo 0)
           echo "DEPLOY SBOM SCA: ${MATCHES} CVE matches"
         continue-on-error: true
