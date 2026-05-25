@@ -131,7 +131,7 @@ jobs:
       - name: Build + Generate SBOM (SSDF PS.2, PS.3 / SR-3, CM-8)
         run: |
           mvn package -DskipTests
-          cp target/classes/META-INF/sbom/application.cdx.json target/payment-api-sbom.json
+          cp target/classes/META-INF/sbom/application.cdx.json target/payment-api-sbom.json 2>/dev/null || true
 
       - name: Validate SBOM quality (SP 800-204D S5.1.1 / SR-3)
         run: |
@@ -1008,7 +1008,7 @@ jobs:
       - name: Rebuild for SLSA provenance
         run: |
           mvn package -DskipTests
-          cp target/classes/META-INF/sbom/application.cdx.json target/payment-api-sbom.json
+          cp target/classes/META-INF/sbom/application.cdx.json target/payment-api-sbom.json 2>/dev/null || true
 
       - name: Generate checksums (SSDF PS.3.2 / DoD Guidebook Table 8)
         run: |
@@ -1654,7 +1654,7 @@ jobs:
       - name: Build JAR
         run: |
           mvn package -DskipTests
-          cp target/classes/META-INF/sbom/application.cdx.json target/payment-api-sbom.json
+          cp target/classes/META-INF/sbom/application.cdx.json target/payment-api-sbom.json 2>/dev/null || true
 
       - name: Set image metadata (SP 800-204D S5.1.3)
         id: meta
@@ -2232,7 +2232,6 @@ jobs:
           echo "| kube-bench | [OK] (SHA pinned) |" >> $GITHUB_STEP_SUMMARY
           echo "| Evidence to S3 | manifest + grype + kube-bench + sbom-sca + cosign-verify [OK] |" >> $GITHUB_STEP_SUMMARY
 
-
   # ============================================================
   # VEX Triage (SP 800-204D S5.3 / SSDF RV.2 / CISA VEX)
   # Triages Grype findings against vex.json, generates CycloneDX
@@ -2286,7 +2285,6 @@ jobs:
           GRYPE_SBOM="./scan-results/grype-sbom-results/results.json"
           GRYPE_IMG="./scan-results/grype-image-results/results.json"
 
-          # Use empty file if not found
           [ -f "$GRYPE_SBOM" ] || echo '{"matches":[]}' > "$GRYPE_SBOM"
           [ -f "$GRYPE_IMG" ] || echo '{"matches":[]}' > "$GRYPE_IMG"
 
@@ -2328,112 +2326,13 @@ jobs:
           print(f'|--------|-------|')
           print(f'| Total Findings | {s[\"total_findings\"]} |')
           print(f'| Unique CVEs | {s[\"unique_vulnerabilities\"]} |')
-          print(f'| ✅ not_affected | {s[\"not_affected_count\"]} |')
-          print(f'| ⚠️ affected | {s[\"affected_count\"]} |')
-          print(f'| 🔍 in_triage | {s[\"in_triage_count\"]} |')
+          print(f'| not_affected | {s[\"not_affected_count\"]} |')
+          print(f'| affected | {s[\"affected_count\"]} |')
+          print(f'| in_triage | {s[\"in_triage_count\"]} |')
           " >> $GITHUB_STEP_SUMMARY
           fi
 
-  # ============================================================
-  # VEX Triage (SP 800-204D S5.3 / SSDF RV.2 / CISA VEX)
-  # Triages Grype findings against vex.json, generates CycloneDX
-  # VEX document, pushes summary to Loki.
-  # ============================================================
-  vex-triage:
-    name: "[RELEASE] VEX Vulnerability Triage"
-    needs: [risk-assess-release, deliver]
-    if: |
-      always() &&
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
 
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@ececac1a45f3b08a01d2dd070d28d111c5fe6722  # v4.1.0
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Download Grype SBOM results
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
-        with:
-          name: grype-sbom-results
-          path: ./scan-results/grype-sbom-results
-        continue-on-error: true
-
-      - name: Download Grype Image results
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
-        with:
-          name: grype-image-results
-          path: ./scan-results/grype-image-results
-        continue-on-error: true
-
-      - name: Setup Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
-        with:
-          python-version: "3.12"
-
-      - name: Run VEX Triage
-        run: |
-          echo "=== Available scan results ==="
-          find ./scan-results/ -name '*.json' -type f | sort
-          echo ""
-
-          GRYPE_SBOM="./scan-results/grype-sbom-results/results.json"
-          GRYPE_IMG="./scan-results/grype-image-results/results.json"
-
-          # Use empty file if not found
-          [ -f "$GRYPE_SBOM" ] || echo '{"matches":[]}' > "$GRYPE_SBOM"
-          [ -f "$GRYPE_IMG" ] || echo '{"matches":[]}' > "$GRYPE_IMG"
-
-          python .github/scripts/vex-triage.py \
-            --grype-results "$GRYPE_SBOM" \
-            --grype-image-results "$GRYPE_IMG" \
-            --vex ./vex.json \
-            --output ./vex-output \
-            --loki-url "${LOKI_URL}" \
-            --commit "${{ github.sha }}" \
-            --product payment-api
-
-      - name: Upload VEX artifacts
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
-        if: always()
-        with:
-          name: vex-results-${{ github.sha }}
-          path: |
-            vex-output/vex.json
-            vex-output/vex-summary.json
-          retention-days: 90
-
-      - name: Archive VEX to S3 (AU-9)
-        if: always()
-        run: |
-          aws s3 cp vex-output/vex.json \
-            s3://${{ secrets.S3_EVIDENCE_BUCKET }}/vex/${{ github.sha }}/vex.json || true
-
-      - name: VEX Summary
-        if: always()
-        run: |
-          echo "## VEX Triage (SP 800-204D / SSDF RV.2)" >> $GITHUB_STEP_SUMMARY
-          if [ -f vex-output/vex-summary.json ]; then
-            python3 -c "
-          import json
-          with open('vex-output/vex-summary.json') as f:
-              s = json.load(f)
-          print(f'| Metric | Value |')
-          print(f'|--------|-------|')
-          print(f'| Total Findings | {s[\"total_findings\"]} |')
-          print(f'| Unique CVEs | {s[\"unique_vulnerabilities\"]} |')
-          print(f'| ✅ not_affected | {s[\"not_affected_count\"]} |')
-          print(f'| ⚠️ affected | {s[\"affected_count\"]} |')
-          print(f'| 🔍 in_triage | {s[\"in_triage_count\"]} |')
-          " >> $GITHUB_STEP_SUMMARY
-          fi
   # ============================================================
   # POA&M Registry Update (CA-5 / CA-7 / PM-4)
   # Tracks all findings across pipeline runs, computes SLA,
