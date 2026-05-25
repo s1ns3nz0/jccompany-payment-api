@@ -3,7 +3,7 @@ on:
   push:
     branches: [main, master]
   schedule:
-    - cron: "0 9 * * 1"  # Every Monday 9AM UTC
+    - cron: "0 9 * * 1"
 permissions: read-all
 jobs:
   scorecard:
@@ -30,8 +30,18 @@ jobs:
           name: scorecard-results
           path: scorecard-results.json
           retention-days: 90
-      - name: Push Scorecard to Loki (CA-7 / SR-3)
-        if: always()
+
+  loki-push:
+    name: Push Scorecard to Loki
+    needs: scorecard
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Download Scorecard results
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: scorecard-results
+      - name: Push to Loki (CA-7 / SR-3)
         env:
           LOKI_URL: https://loki.miata.cloud
         run: |
@@ -39,13 +49,10 @@ jobs:
             echo "::warning::Scorecard results not found"
             exit 0
           fi
-          # Extract overall score and per-check scores
           python3 -c "
-          import json, urllib.request, time
-
+          import json, urllib.request, time, os
           with open('scorecard-results.json') as f:
               data = json.load(f)
-
           score = data.get('score', 0)
           checks = []
           for check in data.get('checks', []):
@@ -54,10 +61,8 @@ jobs:
                   'score': check.get('score', -1),
                   'reason': check.get('reason', '')[:80]
               })
-
           passed = sum(1 for c in checks if c['score'] >= 7)
           total = len(checks)
-
           payload = {
               'streams': [{
                   'stream': {
@@ -75,11 +80,8 @@ jobs:
                   ]]
               }]
           }
-
-          import os
-          loki_url = os.environ['LOKI_URL']
           req = urllib.request.Request(
-              loki_url + '/loki/api/v1/push',
+              os.environ['LOKI_URL'] + '/loki/api/v1/push',
               data=json.dumps(payload).encode(),
               headers={'Content-Type': 'application/json'},
               method='POST'
