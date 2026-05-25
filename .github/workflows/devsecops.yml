@@ -987,7 +987,7 @@ jobs:
 
     name: "[RELEASE] Integrated Risk Gate (SP 800-30)"
     runs-on: ubuntu-latest
-    needs: [risk-assess-develop, risk-assess-build, risk-assess-test, integration-dast, sca-grype-image, trivy-cis, sast-spotbugs]
+    needs: [risk-assess-develop, risk-assess-build, risk-assess-test, integration-dast, sca-grype-image, trivy-cis, sast-spotbugs, vex-triage]
     if: |
       always() &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') &&
@@ -1074,8 +1074,17 @@ jobs:
           RISK_URL: ${{ secrets.RISK_PLATFORM_URL }}
         run: |
           # Bedrock AI mode: async request + job polling
-          # Build combined payload with async_mode flag
-          jq '. + {"async_mode": true, "phase": "RELEASE"}' risk-input/combined.json > risk-input/payload.json
+          # Build combined payload with async_mode flag + VEX data
+          VEX_FILE=$(find scanner-results/ -name "vex.json" -path "*vex-results*" 2>/dev/null | head -1)
+          if [ -n "$VEX_FILE" ] && [ -f "$VEX_FILE" ]; then
+            echo "VEX data found: ${VEX_FILE}"
+            jq --slurpfile vex "$VEX_FILE" \
+              '. + {"async_mode": true, "phase": "RELEASE", "vex": $vex[0]}' \
+              risk-input/combined.json > risk-input/payload.json
+          else
+            echo "::warning::VEX data not found -- proceeding without VEX"
+            jq '. + {"async_mode": true, "phase": "RELEASE"}' risk-input/combined.json > risk-input/payload.json
+          fi
           HTTP_CODE=$(curl -s -o risk-release-response.json -w "%{http_code}" \
             -X POST "${RISK_URL}/v1/products/payment-api/assess" \
             -H "X-API-Key: ${RISK_API_KEY}" \
@@ -1769,6 +1778,13 @@ jobs:
           aws s3 cp target/payment-api-sbom.json \
             s3://${{ secrets.S3_EVIDENCE_BUCKET }}/sbom/${{ github.sha }}/payment-api-sbom.json
 
+      - name: Download VEX results
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: vex-results-${{ github.sha }}
+          path: ./vex-output
+        continue-on-error: true
+
       - name: Risk Assessment -- DELIVER (RA-3, CA-7 / SP 800-30)
         if: always()
         env:
@@ -1797,7 +1813,15 @@ jobs:
           COUNT=$(ls risk-input/*.json 2>/dev/null | wc -l)
           if [ "$COUNT" -gt 0 ]; then
             jq -n '{results: [inputs]}' risk-input/*.json > risk-input/combined.json
-            jq '. + {"async_mode": true, "phase": "DELIVER"}' risk-input/combined.json > risk-input/payload.json
+            # Include VEX data if available (SP 800-204D S5.3)
+            VEX_FILE=$(find . -name "vex.json" -path "*vex-output*" -o -name "vex.json" -path "*vex-results*" 2>/dev/null | head -1)
+            if [ -n "$VEX_FILE" ] && [ -f "$VEX_FILE" ]; then
+              jq --slurpfile vex "$VEX_FILE" \
+                '. + {"async_mode": true, "phase": "DELIVER", "vex": $vex[0]}' \
+                risk-input/combined.json > risk-input/payload.json
+            else
+              jq '. + {"async_mode": true, "phase": "DELIVER"}' risk-input/combined.json > risk-input/payload.json
+            fi
             HTTP_CODE=$(curl -s -o risk-deliver-response.json -w "%{http_code}" \
               -X POST "${RISK_URL}/v1/products/payment-api/assess" \
               -H "X-API-Key: ${RISK_API_KEY}" \
@@ -2144,6 +2168,13 @@ jobs:
           aws s3 cp /tmp/deploy-manifest.json \
             s3://${{ secrets.S3_EVIDENCE_BUCKET }}/deploy/${{ github.sha }}/manifest.json
 
+      - name: Download VEX results
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: vex-results-${{ github.sha }}
+          path: ./vex-output
+        continue-on-error: true
+
       - name: Risk Assessment -- DEPLOY (RA-3, CA-7 / SP 800-30 / cATO ConMon)
         if: always()
         env:
@@ -2178,7 +2209,15 @@ jobs:
           COUNT=$(ls risk-input/*.json 2>/dev/null | wc -l)
           if [ "$COUNT" -gt 0 ]; then
             jq -n '{results: [inputs]}' risk-input/*.json > risk-input/combined.json
-            jq '. + {"async_mode": true, "phase": "DEPLOY"}' risk-input/combined.json > risk-input/payload.json
+            # Include VEX data if available (SP 800-204D S5.3)
+            VEX_FILE=$(find . -name "vex.json" -path "*vex-output*" -o -name "vex.json" -path "*vex-results*" 2>/dev/null | head -1)
+            if [ -n "$VEX_FILE" ] && [ -f "$VEX_FILE" ]; then
+              jq --slurpfile vex "$VEX_FILE" \
+                '. + {"async_mode": true, "phase": "DEPLOY", "vex": $vex[0]}' \
+                risk-input/combined.json > risk-input/payload.json
+            else
+              jq '. + {"async_mode": true, "phase": "DEPLOY"}' risk-input/combined.json > risk-input/payload.json
+            fi
             HTTP_CODE=$(curl -s -o risk-deploy-response.json -w "%{http_code}" \
               -X POST "${RISK_URL}/v1/products/payment-api/assess" \
               -H "X-API-Key: ${RISK_API_KEY}" \
@@ -2239,7 +2278,7 @@ jobs:
   # ============================================================
   vex-triage:
     name: "[RELEASE] VEX Vulnerability Triage"
-    needs: [risk-assess-release, deliver]
+    needs: [sca-grype, sca-grype-image]
     if: |
       always() &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
