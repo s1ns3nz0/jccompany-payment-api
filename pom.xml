@@ -14,7 +14,7 @@
   <description>JC Company Payment API - DevSecOps Portfolio</description>
   <properties>
     <java.version>17</java.version>
-    <cyclonedx.version>2.9.1</cyclonedx.version>
+    <cyclonedx.version>2.7.11</cyclonedx.version>
   </properties>
   <dependencies>
     <!-- Spring Boot Web -->
@@ -108,7 +108,7 @@
           <execution>
             <phase>package</phase>
             <goals>
-              <goal>makeBom</goal>
+              <goal>makeAggregateBom</goal>
             </goals>
           </execution>
         </executions>
