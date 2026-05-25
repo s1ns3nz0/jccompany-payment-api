@@ -1,0 +1,33 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.4",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-05-25T00:00:00Z",
+    "component": {
+      "type": "application",
+      "name": "payment-api",
+      "version": "1.0.0"
+    }
+  },
+  "vulnerabilities": [
+    {
+      "id": "GHSA-qcwq-55hx-v3vh",
+      "analysis": {
+        "state": "not_affected",
+        "justification": "vulnerable_code_not_in_execute_path",
+        "detail": "H2 database used only in test scope (runtime not exposed)"
+      },
+      "affects": [{"ref": "h2"}]
+    },
+    {
+      "id": "GHSA-45hx-wfhg-7f7j",
+      "analysis": {
+        "state": "not_affected",
+        "justification": "vulnerable_code_not_in_execute_path",
+        "detail": "H2 console disabled in production configuration"
+      },
+      "affects": [{"ref": "h2"}]
+    }
+  ]
+}
