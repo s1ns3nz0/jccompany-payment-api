@@ -14,7 +14,7 @@ RUN mvn package -DskipTests -q
 # ── Stage 2: OTel Agent (SHA-verified / SP 800-204D §5.1.1) ─
 FROM eclipse-temurin:17-jdk-jammy AS otel-agent
 ARG OTEL_VERSION=2.28.1
-ARG OTEL_SHA256=7d12c02ef4f6c0063bc231d8ac3d1b7f8fe4861d1ee7a92b04fbdaa6fa3cf675
+ARG OTEL_SHA256=faa89bdeebf9b1f52be4a4374689176717b02a59df2d8f8b6eb9aa39f9292589
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 RUN curl -sSfL \
   https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/download/v${OTEL_VERSION}/opentelemetry-javaagent.jar \
