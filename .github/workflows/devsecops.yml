@@ -2281,8 +2281,6 @@ jobs:
             --results-dir ./risk-results \
             --s3-bucket "${{ secrets.S3_EVIDENCE_BUCKET }}" \
             --loki-url "${LOKI_URL}" \
-          
-          
             --commit "${{ github.sha }}" \
             --run-id "${{ github.run_id }}"
 
@@ -2366,8 +2364,6 @@ jobs:
 
           python .github/scripts/risk-dashboard-gen.py \
             --results-dir ./risk-results \
-            --s3-bucket "${{ secrets.S3_EVIDENCE_BUCKET }}" \
-            --loki-url "${LOKI_URL}" \
             --output-dir ./risk-site \
             --commit "${{ github.sha }}" \
             --run-id "${{ github.run_id }}"
