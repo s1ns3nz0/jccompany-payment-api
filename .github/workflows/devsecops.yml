@@ -143,7 +143,7 @@ jobs:
           assert bom.get('serialNumber'), 'serialNumber missing (NTIA)'
           assert bom.get('metadata', {}).get('component'), 'metadata.component missing (NTIA)'
           comps = bom.get('components', [])
-          assert len(comps) > 5, f'Too few components: {len(comps)}'
+          assert len(comps) > 40, f'Too few components: {len(comps)} (expected ~80)'
           print(f'SBOM OK: {len(comps)} components')
           "
 
@@ -2516,7 +2516,7 @@ jobs:
 
       - name: Push data to S3 (CloudFront)
         run: |
-          if [ -d ./risk-site/data ]; then
+          echo "=== risk-site contents ===" && find ./risk-site -type f | head -30 && echo "===" && if [ -d ./risk-site/data ]; then
             aws s3 sync ./risk-site/data/ s3://jccompany-web/risk/data/ \
               --cache-control "max-age=60"
             echo "Risk dashboard data pushed to s3://jccompany-web/risk/data/"
