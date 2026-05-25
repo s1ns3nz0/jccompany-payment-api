@@ -14,6 +14,7 @@
   <description>JC Company Payment API - DevSecOps Portfolio</description>
   <properties>
     <java.version>17</java.version>
+    <tomcat.version>10.1.55</tomcat.version>
     <cyclonedx.version>2.9.1</cyclonedx.version>
   </properties>
   <dependencies>
