@@ -60,7 +60,7 @@ jobs:
           fi
 
       - name: Upload Gitleaks results
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: gitleaks-results
@@ -90,7 +90,7 @@ jobs:
           echo "Semgrep findings: $(jq '.runs[0].results | length' semgrep-results.sarif 2>/dev/null || echo 0)"
 
       - name: Upload Semgrep results (SP 800-204D S5.1.3 / SSDF RV.1.3)
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: semgrep-results-${{ github.sha }}
@@ -156,7 +156,7 @@ jobs:
         run: docker save payment-api:${{ steps.meta.outputs.git-sha }} | gzip > payment-api-image.tar.gz
 
       - name: Upload JAR
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: jar-${{ steps.meta.outputs.git-sha }}
@@ -164,7 +164,7 @@ jobs:
           retention-days: 90
 
       - name: Upload Docker image
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: docker-image-${{ steps.meta.outputs.git-sha }}
@@ -172,7 +172,7 @@ jobs:
           retention-days: 90
 
       - name: Upload SBOM (SSDF PS.3 / SR-3)
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: sbom-${{ steps.meta.outputs.git-sha }}
@@ -227,7 +227,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload Hadolint results
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: hadolint-results
@@ -286,7 +286,7 @@ jobs:
           echo "- Controls: CM-2, CM-6, AC-4, AC-6, SC-5, SC-28" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload Checkov results
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: checkov-results
@@ -311,7 +311,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload CIS Java results
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: cis-java-results
@@ -343,7 +343,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload SpotBugs report
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: spotbugs-report
@@ -381,7 +381,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload Grype SBOM results
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: grype-sbom-results
@@ -411,7 +411,7 @@ jobs:
         run: mvn verify
 
       - name: Upload test results
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: test-results
@@ -463,7 +463,7 @@ jobs:
           echo "Trivy: ${VULNS} vulnerabilities found"
 
       - name: Upload Trivy CIS results
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: trivy-cis-results
@@ -527,7 +527,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload ZAP report
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: zap-report
@@ -573,7 +573,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload Grype Image results
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: grype-image-results
@@ -676,7 +676,7 @@ jobs:
           fi
 
       - name: Upload DEVELOP risk assessment
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: risk-assess-develop-${{ github.sha }}
@@ -776,7 +776,7 @@ jobs:
           fi
 
       - name: Upload BUILD risk assessment
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: risk-assess-build-${{ github.sha }}
@@ -873,7 +873,7 @@ jobs:
           fi
 
       - name: Upload TEST risk assessment
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: risk-assess-test-${{ github.sha }}
@@ -1202,7 +1202,7 @@ jobs:
           subject-path: target/*.jar
 
       - name: Upload release artifacts + risk assessment
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: release-artifacts-${{ github.sha }}
@@ -1601,7 +1601,7 @@ jobs:
           PYEOF
 
       - name: Upload OSCAL Assessment Results (CA-7 / AU-9)
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: oscal-assessment-results-${{ github.sha }}
@@ -1767,7 +1767,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload SBOM SCA results (SSDF RV.1.3)
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: deliver-sbom-sca-${{ github.sha }}
@@ -1859,7 +1859,7 @@ jobs:
           fi
 
       - name: Upload DELIVER risk assessment
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: risk-assess-deliver-${{ github.sha }}
@@ -1953,7 +1953,7 @@ jobs:
           cat /tmp/cosign-verify-attestation.json | head -20
 
       - name: Upload cosign verification evidence (AU-9)
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: cosign-verify-${{ github.sha }}
@@ -2099,7 +2099,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload SBOM SCA results (SSDF RV.1.3)
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: deploy-sbom-sca-${{ github.sha }}
@@ -2133,7 +2133,7 @@ jobs:
           grype "${IMAGE_URI}" --output table --fail-on critical || true
 
       - name: Upload post-deploy Grype results
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: post-deploy-grype-${{ github.sha }}
@@ -2159,7 +2159,7 @@ jobs:
           kubectl delete job kube-bench --ignore-not-found
 
       - name: Upload kube-bench results
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: kube-bench-${{ github.sha }}
@@ -2240,7 +2240,7 @@ jobs:
           fi
 
       - name: Upload DEPLOY risk assessment
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: risk-assess-deploy-${{ github.sha }}
@@ -2335,7 +2335,7 @@ jobs:
             --product payment-api
 
       - name: Upload VEX artifacts
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: vex-results-${{ github.sha }}
@@ -2429,7 +2429,7 @@ jobs:
             --run-id "${{ github.run_id }}"
 
       - name: Upload POA&M report artifact
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
           name: poam-registry-${{ github.sha }}
